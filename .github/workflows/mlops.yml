@@ -38,7 +38,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Run unit tests
-        run: pytest tests/ -v
+        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ -v
 
   train:
     name: Train & Track Model
