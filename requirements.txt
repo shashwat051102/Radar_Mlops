@@ -1,6 +1,8 @@
 # Deep Learning Frameworks
 torch==2.0.1
 torchvision==0.15.2
+timm==0.9.12
+torchmetrics==1.2.0
 
 # Data Processing
 numpy==1.24.3
