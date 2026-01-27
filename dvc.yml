@@ -9,3 +9,5 @@ stages:
       - data/processed/training_history.png
     metrics:
       - metrics/best_acc.json
+    plots:
+      - data/processed/training_history.png

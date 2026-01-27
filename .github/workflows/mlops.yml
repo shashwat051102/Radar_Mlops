@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ✅ PIP CACHE (ADD HERE)
+      # ✅ Cache pip
       - name: Cache pip
         uses: actions/cache@v3
         with:
@@ -37,8 +37,11 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
+      # ✅ MLflow disabled during tests
       - name: Run unit tests
-        run: PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ -v
+        run: |
+          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ -v
+
 
   train:
     name: Train & Track Model
@@ -55,7 +58,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ✅ PIP CACHE (ADD HERE)
+      # ✅ Cache pip
       - name: Cache pip
         uses: actions/cache@v3
         with:
@@ -69,7 +72,8 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Configure DVC Remote (DAGsHub)
+      # ✅ Configure DVC remote (DAGsHub)
+      - name: Configure DVC Remote
         env:
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
@@ -77,13 +81,16 @@ jobs:
           dvc remote modify origin --local user shashwatsingh0511
           dvc remote modify origin --local password $DAGSHUB_TOKEN
 
-      - name: Pull data from DVC remote
+      - name: Pull data from DVC
         run: dvc pull
 
-      - name: Run DVC pipeline
+      # ✅ Enable MLflow ONLY here
+      - name: Run DVC pipeline (training)
         env:
-          MLFLOW_TRACKING_URI: ${{ secrets.MLFLOW_TRACKING_URI }}
+          ENABLE_MLFLOW: "true"
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: dvc repro
 
+      # ✅ DVC PUSH — ONLY RUNS ON GITHUB
       - name: Push outputs to DVC remote
-        run: dvc push -j 1
+        run: dvc push 

@@ -54,7 +54,8 @@ CONFIG = {
     "DAGSHUB_USERNAME":os.getenv("DAGSHUB_USERNAME"),
     "DAGSHUB_TOKEN":os.getenv("DAGSHUB_TOKEN"),
     "DAGSHUB_REPO":"radae_mlops",
-    
+    "ENABLE_MLFLOW": os.getenv("ENABLE_MLFLOW", "false").lower() == "true",
+
     # Data
     "DATA_DIR": "data/raw",
     "OUTPUT_DIR": "data/processed",
@@ -97,29 +98,30 @@ for k,v in CONFIG.items():
 
 
 def init_mlflow():
+    if not CONFIG["ENABLE_MLFLOW"]:
+        print("🚫 MLflow disabled")
+        return None
+
+    if not CONFIG['DAGSHUB_USERNAME'] or not CONFIG['DAGSHUB_TOKEN']:
+        raise RuntimeError("DAGSHUB credentials missing")
+
     os.environ['MLFLOW_TRACKING_USERNAME'] = CONFIG['DAGSHUB_USERNAME']
     os.environ['MLFLOW_TRACKING_PASSWORD'] = CONFIG['DAGSHUB_TOKEN']
-    
+
     dagshub.init(
         repo_owner=CONFIG['DAGSHUB_USERNAME'],
         repo_name=CONFIG['DAGSHUB_REPO'],
         mlflow=True
     )
-    
+
     tracking_uri = f"https://dagshub.com/{CONFIG['DAGSHUB_USERNAME']}/{CONFIG['DAGSHUB_REPO']}.mlflow"
-    
     mlflow.set_tracking_uri(tracking_uri)
-    
-    experiment_name = "Radar_MLOps_Experiment"
-    mlflow.set_experiment(experiment_name)
-    
-    print(f"   Tracking URI: {tracking_uri}")
-    print(f"   Experiment: {experiment_name}")
-    print(f"   Dashboard: https://dagshub.com/{CONFIG['DAGSHUB_USERNAME']}/{CONFIG['DAGSHUB_REPO']}/experiments")
-    
+    mlflow.set_experiment("Radar_MLOps_Experiment")
+
+    print(f"MLflow tracking at {tracking_uri}")
     return tracking_uri
 
-MLFLOW_URI = init_mlflow()
+
 
 
 
@@ -817,10 +819,11 @@ if __name__ == "__main__":
     os.makedirs(CONFIG["OUTPUT_DIR"], exist_ok=True)
     os.makedirs("metrics", exist_ok=True)
 
+    MLFLOW_URI = init_mlflow()
+
     samples, class_to_idx = load_dataset(CONFIG["DATA_DIR"])
     train_loader, val_loader, test_loader = create_dataloaders(samples, class_to_idx)
 
-    history, best_acc = train_model()
+    model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
 
-    with open("metrics/best_acc.json", "w") as f:
-        json.dump({"best_val_accuracy": best_acc}, f)
+    history, best_acc = train_model()
