@@ -1,0 +1,6 @@
+# Ignore everything in data
+*
+
+# Except DVC files
+!.gitignore
+!*.dvc

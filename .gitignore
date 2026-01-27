@@ -1,1 +1,72 @@
+# =====================
+# Python
+# =====================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.ipynb_checkpoints/
 
+# =====================
+# Virtual Environments
+# =====================
+.venv/
+venv/
+env/
+
+# =====================
+# OS / IDE
+# =====================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =====================
+# Logs & temp
+# =====================
+*.log
+logs/
+tmp/
+
+# =====================
+# ML artifacts (tracked by DVC instead)
+# =====================
+data/processed/
+models/
+metrics/
+*.pth
+*.pt
+
+# =====================
+# MLflow
+# =====================
+mlruns/
+mlflow/
+
+# =====================
+# DVC
+# =====================
+.dvc/cache/
+.dvc/tmp/
+.dvc/config.local
+
+# =====================
+# Docker
+# =====================
+*.tar
+docker-compose.override.yml
+
+# =====================
+# Secrets
+# =====================
+.env
+.env.*
+# MLOps pipeline guide (local / draft)
+MLOPS_PIPELINE_GUIDE
+MLOPS_PIPELINE_GUIDE.md
+
+# Jupyter notebooks (exploration only)
+radar_mlops.ipynb
+*.ipynb
+.ipynb_checkpoints/
