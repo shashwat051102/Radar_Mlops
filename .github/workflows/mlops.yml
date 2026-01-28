@@ -23,7 +23,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ✅ Cache pip
+      #  Cache pip
       - name: Cache pip
         uses: actions/cache@v3
         with:
@@ -37,7 +37,7 @@ jobs:
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ✅ MLflow disabled during tests
+      #  MLflow disabled during tests
       - name: Run unit tests
         run: |
           PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ -v
@@ -58,7 +58,7 @@ jobs:
         with:
           python-version: "3.10"
 
-      # ✅ Cache pip
+      #  Cache pip
       - name: Cache pip
         uses: actions/cache@v3
         with:
@@ -74,7 +74,8 @@ jobs:
           pip install pathspec==0.11.2
           pip install -r requirements.txt
 
-      # ✅ Configure DVC remote (DAGsHub)
+
+      #  Configure DVC remote (DAGsHub)
       - name: Configure DVC Remote
         env:
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
@@ -86,15 +87,17 @@ jobs:
       - name: Pull data from DVC
         run: dvc pull || echo "DVC pull failed, continuing without data"
 
-      # ✅ Enable MLflow ONLY here
+      #  Main: PyTorch training with MLflow tracking
       - name: Run DVC pipeline (training)
         env:
           ENABLE_MLFLOW: "true"
+          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
           dvc repro || echo "DVC pipeline failed, running direct training"
           python radar_mlops.py
 
-      # ✅ DVC PUSH — ONLY RUNS ON GITHUB
+      #  DVC PUSH — ONLY RUNS ON GITHUB
       - name: Push outputs to DVC remote
-        run: dvc push || echo "DVC push failed, outputs not saved" 
+        run: dvc push || echo "DVC push failed, outputs not saved"
+

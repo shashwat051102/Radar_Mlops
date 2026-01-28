@@ -142,30 +142,41 @@ class RadarDataset(Dataset):
         # Retrieve sample at given index
         sample = self.samples[idx]
         
-        # Load image from file path
-        image = cv2.imread(sample["image"])
-        # Convert image from BGR to RGB color space
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # Handle demo mode (when image path is None)
+        if sample["image"] is None:
+            # Create synthetic image data for demo
+            image = np.random.randint(0, 255, (CONFIG['IMAGE_SIZE'], CONFIG['IMAGE_SIZE'], 3), dtype=np.uint8)
+        else:
+            # Load image from file path
+            image = cv2.imread(sample["image"])
+            # Convert image from BGR to RGB color space
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        
         # Resize image to configured size (224x224)
         image = cv2.resize(image, (CONFIG['IMAGE_SIZE'], CONFIG['IMAGE_SIZE']))
         # Normalize image to [0, 1] range and convert to float32
         image = image.astype(np.float32) / 255.0
         
-        # Load radar data from .mat file
-        try:
-            radar_data = loadmat(sample["radar"])
-            # Extract radar cube, fallback to 'radar' key or zeros if not found
-            radar = radar_data.get('data_cube', radar_data.get('radar', np.zeros((128, 255))))
-            # If radar is 3D, extract first slice
-            if radar.ndim > 2:
-                radar = radar[:, :, 0]  
-            # Resize radar to target dimensions
-            radar = cv2.resize(radar.astype(np.float32), (255, 128))
-            # Normalize radar to [0, 1] range
-            radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
-        except:
-            # Create empty radar array if loading fails
-            radar = np.zeros((128, 255), dtype=np.float32)
+        # Handle demo mode for radar data
+        if sample["radar"] is None:
+            # Create synthetic radar data for demo
+            radar = np.random.rand(128, 255).astype(np.float32)
+        else:
+            # Load radar data from .mat file
+            try:
+                radar_data = loadmat(sample["radar"])
+                # Extract radar cube, fallback to 'radar' key or zeros if not found
+                radar = radar_data.get('data_cube', radar_data.get('radar', np.zeros((128, 255))))
+                # If radar is 3D, extract first slice
+                if radar.ndim > 2:
+                    radar = radar[:, :, 0]  
+                # Resize radar to target dimensions
+                radar = cv2.resize(radar.astype(np.float32), (255, 128))
+                # Normalize radar to [0, 1] range
+                radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
+            except:
+                # Create empty radar array if loading fails
+                radar = np.zeros((128, 255), dtype=np.float32)
             
         # Convert image from HWC to CHW format for PyTorch
         image = torch.from_numpy(image).permute(2, 0, 1)
@@ -185,6 +196,24 @@ def load_dataset(dat_dir):
     
     # Convert directory path to Path object
     data_path = Path(dat_dir)
+    
+    # Check if data directory exists
+    if not data_path.exists():
+        print(f"  Data directory {dat_dir} not found - running in demo mode")
+        print("   Creating minimal demo dataset for pipeline testing")
+        
+        # Create minimal demo dataset for testing
+        for class_name, class_idx in class_to_idx.items():
+            # Add one dummy sample per class for demo
+            samples.append({
+                'image': None,  # Will be handled in dataset
+                'radar': None,
+                'label': class_idx,
+                'class_name': class_name
+            })
+        
+        print(f"   Created demo dataset with {len(samples)} samples")
+        return samples, class_to_idx
     
     # Iterate through each class
     for class_name, class_idx in tqdm(class_to_idx.items(), desc="Loading classes"):
