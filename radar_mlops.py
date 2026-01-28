@@ -24,8 +24,8 @@ from sklearn.preprocessing import LabelEncoder
 
 import cv2
 from PIL import Image
-import matplotlib.pyplot as plt
-import seaborn as sns
+# import matplotlib.pyplot as plt
+# import seaborn as sns
 from tqdm import tqdm
 
 import torch
@@ -237,8 +237,7 @@ def load_dataset(dat_dir):
     # Return samples list and class-to-index mapping        
     return samples, class_to_idx
 
-# Load dataset from configured directory
-samples, class_to_idx = load_dataset(CONFIG["DATA_DIR"])
+
 
 
 
@@ -246,6 +245,62 @@ samples, class_to_idx = load_dataset(CONFIG["DATA_DIR"])
 
 """Split data and create Pytorch Dataloaders"""
 
+from torch.utils.data import WeightedRandomSampler
+
+def create_balanced_dataloaders(samples, class_to_idx):
+    """Create balanced dataloaders with weighted sampling for class imbalance"""
+    
+    # Calculate class weights
+    labels = [s['label'] for s in samples]
+    class_counts = np.bincount(labels)
+    total_samples = len(labels)
+    
+    # Inverse frequency weighting
+    class_weights = total_samples / (len(class_counts) * class_counts)
+    sample_weights = [class_weights[label] for label in labels]
+    
+    # Split data
+    indices = np.arange(len(samples))
+    train_idx, temp_idx = train_test_split(indices, train_size=0.7, stratify=labels, random_state=42)
+    val_idx, test_idx = train_test_split(
+        temp_idx, train_size=0.5, 
+        stratify=[labels[i] for i in temp_idx], random_state=42
+    )
+    
+    # Create datasets
+    train_samples = [samples[i] for i in train_idx]
+    val_samples = [samples[i] for i in val_idx]
+    test_samples = [samples[i] for i in test_idx]
+    
+    train_dataset = RadarDataset(train_samples, class_to_idx)
+    val_dataset = RadarDataset(val_samples, class_to_idx)
+    test_dataset = RadarDataset(test_samples, class_to_idx)
+    
+    # Create weighted sampler for training
+    train_labels = [s['label'] for s in train_samples]
+    train_sample_weights = [class_weights[label] for label in train_labels]
+    train_sampler = WeightedRandomSampler(train_sample_weights, len(train_sample_weights))
+    
+    # Create dataloaders
+    train_loader = DataLoader(
+        train_dataset, batch_size=CONFIG['BATCH_SIZE'], 
+        sampler=train_sampler, num_workers=2, pin_memory=True
+    )
+    val_loader = DataLoader(
+        val_dataset, batch_size=CONFIG['BATCH_SIZE'], 
+        shuffle=False, num_workers=2, pin_memory=True
+    )
+    test_loader = DataLoader(
+        test_dataset, batch_size=CONFIG['BATCH_SIZE'], 
+        shuffle=False, num_workers=2, pin_memory=True
+    )
+    
+    print(f"   Train: {len(train_dataset)} samples ({len(train_loader)} batches)")
+    print(f"   Val:   {len(val_dataset)} samples ({len(val_loader)} batches)")
+    print(f"   Test:  {len(test_dataset)} samples ({len(test_loader)} batches)")
+    print(f"   Class weights: {dict(zip(CONFIG['CLASS_MAPPING'].values(), class_weights))}")
+    
+    return train_loader, val_loader, test_loader, class_weights
 
 def create_dataloaders(samples, class_to_idx):
     """Create train/test dataloaders"""
@@ -290,15 +345,29 @@ def create_dataloaders(samples, class_to_idx):
         shuffle=True, num_workers=2, pin_memory=False
     )
     
+    # Calculate class weights for imbalanced dataset handling
+    class_counts = {}
+    for sample in train_samples:
+        class_name = sample['class_name']
+        class_counts[class_name] = class_counts.get(class_name, 0) + 1
+    
+    # Calculate inverse frequency weights
+    total_samples = len(train_samples)
+    class_weights = []
+    for i in range(CONFIG['NUM_CLASSES']):
+        class_name = CONFIG['CLASS_MAPPING'][str(i)]
+        count = class_counts.get(class_name, 1)
+        weight = total_samples / (CONFIG['NUM_CLASSES'] * count)
+        class_weights.append(weight)
     
     print(f"   Train: {len(train_dataset)} samples ({len(train_loader)} batches)")
     print(f"   Val:   {len(val_dataset)} samples ({len(val_loader)} batches)")
     print(f"   Test:  {len(test_dataset)} samples ({len(test_loader)} batches)")
+    print(f"   Class weights: {dict(zip(CONFIG['CLASS_MAPPING'].values(), class_weights))}")
     
     
-    return train_loader, val_loader,test_loader
+    return train_loader, val_loader,test_loader, class_weights
 
-train_loader, val_loader, test_loader = create_dataloaders(samples, class_to_idx)
 
 
 
@@ -381,9 +450,6 @@ class MultimodalModel(nn.Module):
     
     
 # Create model
-model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
-print(f"Model created | Parameters: {sum(p.numel() for p in model.parameters()):,}")
-
 
 
 
@@ -544,10 +610,18 @@ print("Training function defined")
 
 """Complete training loop with MLflow logging"""
 
-def train_model():
+def train_model(model, train_loader, val_loader, test_loader, class_weights=None):
     """Main training function"""
     
-    criterion = nn.CrossEntropyLoss()
+    # Ensure output directory exists
+    os.makedirs(CONFIG['OUTPUT_DIR'], exist_ok=True)
+    
+    # Use class weights if provided (for imbalanced dataset)
+    if class_weights is not None:
+        class_weights_tensor = torch.FloatTensor(class_weights).to(device)
+        criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+    else:
+        criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=CONFIG['LEARNING_RATE'], weight_decay=CONFIG['WEIGHT_DECAY'])
     scheduler = ReduceLROnPlateau(optimizer, mode="max", factor=0.5, patience=5, verbose=True)
     
@@ -593,8 +667,7 @@ def train_model():
             history['val_acc'].append(val_m['accuracy'])
             
             # log in to mlflow
-            mlflow.log_metric({
-                
+            mlflow.log_metrics({
                 'train_loss': train_loss,
                 'train_accuracy': train_m['accuracy'],
                 'train_precision': train_m['precision_macro'],
@@ -606,9 +679,7 @@ def train_model():
                 'val_recall': val_m['recall_macro'],
                 'val_f1': val_m['f1_macro'],
                 'learning_rate': lr
-            }, step=epoch)
-            
-            
+            }, step=epoch)            
             # log per class metrics
             for name in CONFIG['CLASS_MAPPING'].values():
                 if f'precision_{name}' in val_m:
@@ -658,7 +729,7 @@ def train_model():
     
     return history, best_val_acc
 
-history, best_acc = train_model()
+
 
 
 
@@ -668,25 +739,25 @@ history, best_acc = train_model()
 Visualize training results
 """
 
-fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+# fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
-axes[0].plot(history['train_loss'], label='Train')
-axes[0].plot(history['val_loss'], label='Val')
-axes[0].set_title('Loss', fontsize=14, fontweight='bold')
-axes[0].set_xlabel('Epoch')
-axes[0].legend()
-axes[0].grid(True, alpha=0.3)
+# axes[0].plot(history['train_loss'], label='Train')
+# axes[0].plot(history['val_loss'], label='Val')
+# axes[0].set_title('Loss', fontsize=14, fontweight='bold')
+# axes[0].set_xlabel('Epoch')
+# axes[0].legend()
+# axes[0].grid(True, alpha=0.3)
 
-axes[1].plot(history['train_acc'], label='Train')
-axes[1].plot(history['val_acc'], label='Val')
-axes[1].set_title('Accuracy', fontsize=14, fontweight='bold')
-axes[1].set_xlabel('Epoch')
-axes[1].legend()
-axes[1].grid(True, alpha=0.3)
+# axes[1].plot(history['train_acc'], label='Train')
+# axes[1].plot(history['val_acc'], label='Val')
+# axes[1].set_title('Accuracy', fontsize=14, fontweight='bold')
+# axes[1].set_xlabel('Epoch')
+# axes[1].legend()
+# axes[1].grid(True, alpha=0.3)
 
-plt.tight_layout()
-plt.savefig(f"{CONFIG['OUTPUT_DIR']}/training_history.png", dpi=150)
-plt.show()
+# plt.tight_layout()
+# plt.savefig(f"{CONFIG['OUTPUT_DIR']}/training_history.png", dpi=150)
+# plt.show()
 
 
 
@@ -695,10 +766,11 @@ plt.show()
 """Evaluate on test set"""
 
 
-def evaluate_test():
+def evaluate_test(test_loader):
     """Evaluation of model on test set """
     
-    # load best model
+    # Create and load best model
+    model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
     checkpoint = torch.load(f"{CONFIG['OUTPUT_DIR']}/best_model.pth")
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
@@ -741,27 +813,29 @@ def evaluate_test():
     print("CLASSIFICATION REPORT:")
     print("-" * 50)
     print(classification_report(
-        all_labels, all_preds,
+        all_labels_concat, all_preds_concat,
         target_names=list(CONFIG['CLASS_MAPPING'].values()),
         zero_division=0
     ))
     
     
-    # Confusion matrix
-    cm = confusion_matrix(all_labels, all_preds)
+    # Confusion matrix - concatenate tensors
+    all_preds_concat = torch.cat(all_preds).numpy() if all_preds else []
+    all_labels_concat = torch.cat(all_labels).numpy() if all_labels else []
+    cm = confusion_matrix(all_labels_concat, all_preds_concat)
     
     
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
-                xticklabels=list(CONFIG['CLASS_MAPPING'].values()),
-                yticklabels=list(CONFIG['CLASS_MAPPING'].values()))
-    plt.title('Confusion Matrix', fontsize=14, fontweight='bold')
-    plt.xlabel('Predicted')
-    plt.ylabel('True')
-    plt.xticks(rotation=45, ha='right')
-    plt.tight_layout()
-    plt.savefig(f"{CONFIG['OUTPUT_DIR']}/confusion_matrix.png", dpi=150)
-    plt.show()
+    # plt.figure(figsize=(12, 10))
+    # sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+    #             xticklabels=list(CONFIG['CLASS_MAPPING'].values()),
+    #             yticklabels=list(CONFIG['CLASS_MAPPING'].values()))
+    # plt.title('Confusion Matrix', fontsize=14, fontweight='bold')
+    # plt.xlabel('Predicted')
+    # plt.ylabel('True')
+    # plt.xticks(rotation=45, ha='right')
+    # plt.tight_layout()
+    # plt.savefig(f"{CONFIG['OUTPUT_DIR']}/confusion_matrix.png", dpi=150)
+    # plt.show()
     
     
     with mlflow.start_run(run_name="test_evaluation"):
@@ -816,14 +890,12 @@ def predict_single(image_path, radar_path, model_path=None):
 
 
 if __name__ == "__main__":
-    os.makedirs(CONFIG["OUTPUT_DIR"], exist_ok=True)
-    os.makedirs("metrics", exist_ok=True)
-
     MLFLOW_URI = init_mlflow()
 
     samples, class_to_idx = load_dataset(CONFIG["DATA_DIR"])
-    train_loader, val_loader, test_loader = create_dataloaders(samples, class_to_idx)
+    train_loader, val_loader, test_loader, class_weights = create_dataloaders(samples, class_to_idx)
 
     model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
 
-    history, best_acc = train_model()
+    history, best_acc = train_model(model, train_loader, val_loader, test_loader, class_weights)
+
