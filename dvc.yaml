@@ -2,12 +2,11 @@ stages:
   train:
     cmd: python radar_mlops.py
     deps:
-      - radar_mlops.py
-      - data/raw
+    - data/raw
+    - radar_mlops.py
     outs:
-      - data/processed/best_model.pth
-      - data/processed/training_history.png
+    - data/processed/best_model.pth
+    - data/processed/training_history.png
     metrics:
-      - metrics/best_acc.json
-    plots:
-      - data/processed/training_history.png
+    - metrics/best_acc.json:
+        cache: false
