@@ -102,23 +102,24 @@ def init_mlflow():
         print("🚫 MLflow disabled")
         return None
 
-    if not CONFIG['DAGSHUB_USERNAME'] or not CONFIG['DAGSHUB_TOKEN']:
-        raise RuntimeError("DAGSHUB credentials missing")
+    if not CONFIG["DAGSHUB_USERNAME"] or not CONFIG["DAGSHUB_TOKEN"]:
+        print("⚠️ DAGSHUB credentials missing — skipping MLflow init")
+        return None
 
-    os.environ['MLFLOW_TRACKING_USERNAME'] = CONFIG['DAGSHUB_USERNAME']
-    os.environ['MLFLOW_TRACKING_PASSWORD'] = CONFIG['DAGSHUB_TOKEN']
+    
+    os.environ["MLFLOW_TRACKING_USERNAME"] = CONFIG["DAGSHUB_USERNAME"]
+    os.environ["MLFLOW_TRACKING_PASSWORD"] = CONFIG["DAGSHUB_TOKEN"]
 
-    dagshub.init(
-        repo_owner=CONFIG['DAGSHUB_USERNAME'],
-        repo_name=CONFIG['DAGSHUB_REPO'],
-        mlflow=True
+    tracking_uri = (
+        f"https://dagshub.com/"
+        f"{CONFIG['DAGSHUB_USERNAME']}/"
+        f"{CONFIG['DAGSHUB_REPO']}.mlflow"
     )
 
-    tracking_uri = f"https://dagshub.com/{CONFIG['DAGSHUB_USERNAME']}/{CONFIG['DAGSHUB_REPO']}.mlflow"
     mlflow.set_tracking_uri(tracking_uri)
     mlflow.set_experiment("Radar_MLOps_Experiment")
 
-    print(f"MLflow tracking at {tracking_uri}")
+    print(f"✅ MLflow tracking at {tracking_uri}")
     return tracking_uri
 
 
