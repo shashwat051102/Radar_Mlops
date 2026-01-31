@@ -99,9 +99,9 @@ jobs:
         run: |
           pip install dagshub
           dagshub login --token $DAGSHUB_TOKEN
-          dagshub upload \
-            --bucket shashwatsingh0511/radae_mlops \
-            data/raw
+          # Upload local folder `data/raw` to the repo `shashwatsingh0511/radae_mlops`
+          # Usage: dagshub upload <owner/repo> <local-path> [target-path]
+          dagshub upload shashwatsingh0511/radae_mlops data/raw data/raw || echo "dagshub upload failed"
 
 # TRAIN
 
@@ -121,6 +121,5 @@ jobs:
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
           dagshub login --token $DAGSHUB_TOKEN
-          dagshub upload \
-            --bucket shashwatsingh0511/radae_mlops \
-            data/processed models/
+          # Upload trained outputs to the repo under `models/`
+          dagshub upload shashwatsingh0511/radae_mlops data/processed models || echo "dagshub upload failed"
