@@ -77,6 +77,30 @@ jobs:
           ls data/raw | head
 
 
+# ---------------- DVC DATA PUSH (for pipelines) ---------------- #
+
+      - name: DVC Pull (get latest data)
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          pip install dvc
+          dvc remote modify origin --local auth basic
+          dvc remote modify origin --local user ${{ secrets.DAGSHUB_USERNAME }}
+          dvc remote modify origin --local password ${{ secrets.DAGSHUB_TOKEN }}
+          dvc pull
+
+# ---------------- OPTIONAL: UPLOAD DATA FOR UI ---------------- #
+
+      - name: Upload data to DagsHub bucket (for UI)
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          pip install dagshub
+          dagshub login --token $DAGSHUB_TOKEN
+          dagshub upload \
+            --bucket shashwatsingh0511/radae_mlops \
+            data/raw
+
 # TRAIN
 
       - name: Train Model
