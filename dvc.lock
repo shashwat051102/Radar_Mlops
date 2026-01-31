@@ -1,0 +1,27 @@
+schema: '2.0'
+stages:
+  train:
+    cmd: python radar_mlops.py
+    deps:
+    - path: data/raw
+      hash: md5
+      md5: b63847d772108738936d4462b603d760.dir
+      size: 3434377288
+      nfiles: 10765
+    - path: radar_mlops.py
+      hash: md5
+      md5: eeb408e1ffb45fe48ee78a395ee458f7
+      size: 31202
+    outs:
+    - path: data/processed/best_model.pth
+      hash: md5
+      md5: de96687e5238f34fcd77f80740b0cbca
+      size: 1279
+    - path: data/processed/training_history.png
+      hash: md5
+      md5: 90a98df7b95b703fd361789e707ba48f
+      size: 78
+    - path: metrics/best_acc.json
+      hash: md5
+      md5: 99914b932bd37a50b983c5e7c90ae93b
+      size: 2
