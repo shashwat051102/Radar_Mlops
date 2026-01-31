@@ -1,103 +1,100 @@
 name: Radar MLOps Pipeline
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-  workflow_dispatch:
-  schedule:
-    - cron: "0 2 * * 0"   # Weekly retraining (Sunday 2 AM UTC)
 
 jobs:
+
+# ---------------- TEST ---------------- #
+
   test:
-    name: Run Tests
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      #  Cache pip
-      - name: Cache pip
-        uses: actions/cache@v3
+      - uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
 
-      - name: Install dependencies
-        run: |
+      - run: |
           pip install --upgrade pip
           pip install -r requirements.txt
 
-      #  MLflow disabled during tests
-      - name: Run unit tests
-        run: |
-          PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 pytest tests/ -v
+      - run: pytest tests/ -v
 
+
+# ---------------- TRAIN ---------------- #
 
   train:
-    name: Train & Track Model
     needs: test
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest   # change later to GPU runner
+    timeout-minutes: 600     # VERY IMPORTANT (large training)
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      #  Cache pip
-      - name: Cache pip
-        uses: actions/cache@v3
+      - uses: actions/cache@v3
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-pip-
 
       - name: Install dependencies
         run: |
           pip install --upgrade pip
-          # Install pathspec first with specific version for DVC compatibility
-          pip install pathspec==0.11.2
+          pip install dagshub mlflow dvc
           pip install -r requirements.txt
 
 
-      #  Configure DVC remote (DAGsHub)
-      - name: Configure DVC Remote
+# DOWNLOAD DATASET FROM DAGSHUB BUCKET
+
+      - name: Download Radar Dataset
         env:
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
-          dvc remote modify origin --local auth basic
-          dvc remote modify origin --local user shashwatsingh0511
-          dvc remote modify origin --local password $DAGSHUB_TOKEN
+          dagshub login --token $DAGSHUB_TOKEN
+          dagshub download \
+            --bucket shashwatsingh0511/radae_mlops \
+            datasets/radar/radar_dataset.tar
 
-      - name: Pull data from DVC
-        run: dvc pull || echo "DVC pull failed, continuing without data"
 
-      #  Main: PyTorch training with MLflow tracking
-      - name: Run DVC pipeline (training)
+#EXTRACT DATA
+
+      - name: Extract dataset
+        run: |
+          tar -xf radar_dataset.tar
+          ls data/raw | head
+
+
+# TRAIN
+
+      - name: Train Model
         env:
           ENABLE_MLFLOW: "true"
           DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
-          dvc repro || echo "DVC pipeline failed, running direct training"
           python radar_mlops.py
 
-      #  DVC PUSH — ONLY RUNS ON GITHUB
-      - name: Push outputs to DVC remote
-        run: dvc push || echo "DVC push failed, outputs not saved"
 
+# UPLOAD MODEL BACK TO DAGSHUB
+
+      - name: Upload trained model
+        env:
+          DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+        run: |
+          dagshub login --token $DAGSHUB_TOKEN
+          dagshub upload \
+            --bucket shashwatsingh0511/radae_mlops \
+            data/processed models/
