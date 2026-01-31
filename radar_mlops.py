@@ -87,7 +87,7 @@ CONFIG = {
     # Model - AUTO-DETECTED from JSON
     "NUM_CLASSES": NUM_CLASSES,
     "IMAGE_SIZE": 128,
-    "BACKBONE": "MobileNet",
+    "BACKBONE": "mobilenetv2_100",
     
     # Training
     "EPOCHS": 3,
