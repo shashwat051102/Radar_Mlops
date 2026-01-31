@@ -73,7 +73,7 @@ jobs:
           dvc remote modify origin --local password "$DAGSHUB_TOKEN" || true
 
           # Pull dataset from DVC remote (origin)
-          dvc pull -r origin || (echo "dvc pull failed" && exit 1)
+          dvc pull data/raw -r origin || (echo "dvc pull failed" && exit 1)
 
 
 #EXTRACT DATA
@@ -94,7 +94,7 @@ jobs:
           dvc remote modify origin --local auth basic
           dvc remote modify origin --local user ${{ secrets.DAGSHUB_USERNAME }}
           dvc remote modify origin --local password ${{ secrets.DAGSHUB_TOKEN }}
-          dvc pull
+          dvc pull data/raw -r origin || (echo "dvc pull failed" && exit 1)
 
 # ---------------- OPTIONAL: UPLOAD DATA FOR UI ---------------- #
 
