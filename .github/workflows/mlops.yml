@@ -59,14 +59,21 @@ jobs:
 
 # DOWNLOAD DATASET FROM DAGSHUB BUCKET
 
-      - name: Download Radar Dataset
+      - name: Configure DVC and pull dataset
         env:
+          DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
         run: |
-          dagshub login --token $DAGSHUB_TOKEN
-          dagshub download \
-            --bucket shashwatsingh0511/radae_mlops \
-            datasets/radar/radar_dataset.tar
+          pip install --upgrade pip
+          pip install dvc
+
+          # Configure DVC remote with credentials for this runner
+          dvc remote modify origin --local auth basic || true
+          dvc remote modify origin --local user "$DAGSHUB_USERNAME" || true
+          dvc remote modify origin --local password "$DAGSHUB_TOKEN" || true
+
+          # Pull dataset from DVC remote (origin)
+          dvc pull -r origin || (echo "dvc pull failed" && exit 1)
 
 
 #EXTRACT DATA
