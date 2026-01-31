@@ -76,12 +76,7 @@ jobs:
           dvc pull data/raw -r origin || (echo "dvc pull failed" && exit 1)
 
 
-#EXTRACT DATA
-
-      - name: Extract dataset
-        run: |
-          tar -xf radar_dataset.tar
-          ls data/raw | head
+# (tar extraction removed — dataset is pulled via DVC)
 
 
 # ---------------- DVC DATA PUSH (for pipelines) ---------------- #
