@@ -42,25 +42,184 @@ import mlflow
 import mlflow.pytorch
 import dagshub
 
-# Import enhanced accuracy solutions
-try:
-    from accuracy_solutions import (FocalLoss, AdvancedLRScheduler, get_balanced_class_weights, 
-                                    get_weighted_sampler, EnhancedEarlyStopping, 
-                                    calculate_balanced_accuracy, apply_mixup_advanced, 
-                                    AdvancedMetricsTracker, ENHANCED_CONFIG)
-    print("✅ Enhanced accuracy solutions loaded")
-except ImportError as e:
-    print(f"⚠️ Warning: Could not import accuracy solutions - {e}")
-    # Define dummy classes to prevent errors
-    class FocalLoss(nn.CrossEntropyLoss): pass
-    class AdvancedLRScheduler: pass
-    def get_balanced_class_weights(*args): return torch.ones(3)
-    def get_weighted_sampler(*args): return None
-    class EnhancedEarlyStopping: pass
-    def calculate_balanced_accuracy(*args): return 0.0
-    def apply_mixup_advanced(*args): return args
-    class AdvancedMetricsTracker: pass
-    ENHANCED_CONFIG = {}
+# Import enhanced accuracy solutions - INTEGRATED
+class FocalLoss(nn.Module):
+    """Focal Loss for addressing class imbalance"""
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.reduction = reduction
+        
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        
+        if self.alpha is not None:
+            if isinstance(self.alpha, (float, int)):
+                alpha_t = self.alpha
+            else:
+                alpha_t = self.alpha.gather(0, targets)
+            ce_loss = alpha_t * ce_loss
+            
+        focal_loss = (1 - pt) ** self.gamma * ce_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
+class AdvancedLRScheduler:
+    """Advanced learning rate scheduling with warmup and adaptive decay"""
+    def __init__(self, optimizer, warmup_epochs=3, max_lr=5e-5, min_lr=1e-6, 
+                 decay_factor=0.95, patience=2):
+        self.optimizer = optimizer
+        self.warmup_epochs = warmup_epochs
+        self.max_lr = max_lr
+        self.min_lr = min_lr
+        self.decay_factor = decay_factor
+        self.patience = patience
+        self.current_epoch = 0
+        self.best_val_acc = 0.0
+        self.epochs_without_improvement = 0
+        self.is_advanced_scheduler = True
+        self._last_lr = [max_lr]
+        self._state = {'current_epoch': 0, 'best_val_acc': 0.0, 'epochs_without_improvement': 0, 'last_lr': max_lr}
+        
+    def step(self, epoch=None, val_acc=None):
+        if epoch is None:
+            return self._last_lr[0] if self._last_lr else self.max_lr
+        self.current_epoch = epoch
+        try:
+            if epoch < self.warmup_epochs:
+                lr = self.max_lr * (epoch + 1) / self.warmup_epochs
+            else:
+                if val_acc is not None:
+                    if val_acc > self.best_val_acc:
+                        self.best_val_acc = val_acc
+                        self.epochs_without_improvement = 0
+                    else:
+                        self.epochs_without_improvement += 1
+                    if self.epochs_without_improvement >= self.patience:
+                        lr = max(self.max_lr * (self.decay_factor ** (self.epochs_without_improvement - self.patience + 1)), self.min_lr)
+                    else:
+                        lr = self.max_lr
+                else:
+                    lr = self.min_lr + (self.max_lr - self.min_lr) * 0.5 * (1 + np.cos(np.pi * epoch / 50))
+            lr = max(self.min_lr, min(lr, self.max_lr))
+            for param_group in self.optimizer.param_groups:
+                param_group['lr'] = lr
+            self._last_lr = [lr]
+            self._state.update({'current_epoch': self.current_epoch, 'best_val_acc': self.best_val_acc, 'epochs_without_improvement': self.epochs_without_improvement, 'last_lr': lr})
+            return lr
+        except Exception as e:
+            print(f"⚠️ Error in AdvancedLRScheduler.step: {e}")
+            return self._last_lr[0] if self._last_lr else self.max_lr
+        
+    def get_last_lr(self):
+        return self._last_lr
+    
+    def state_dict(self):
+        self._state.update({'current_epoch': self.current_epoch, 'best_val_acc': self.best_val_acc, 'epochs_without_improvement': self.epochs_without_improvement, 'last_lr': self._last_lr[0] if self._last_lr else self.max_lr})
+        return self._state.copy()
+    
+    def load_state_dict(self, state_dict):
+        try:
+            self.current_epoch = state_dict.get('current_epoch', 0)
+            self.best_val_acc = state_dict.get('best_val_acc', 0.0)
+            self.epochs_without_improvement = state_dict.get('epochs_without_improvement', 0)
+            last_lr = state_dict.get('last_lr', self.max_lr)
+            self._last_lr = [last_lr]
+            self._state = state_dict.copy()
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to load scheduler state: {e}")
+            self.current_epoch = 0
+            self.best_val_acc = 0.0
+            self.epochs_without_improvement = 0
+            self._last_lr = [self.max_lr]
+
+def get_balanced_class_weights(train_labels, num_classes=3):
+    """Compute enhanced class weights to address severe class imbalance"""
+    from sklearn.utils.class_weight import compute_class_weight
+    classes = np.arange(num_classes)
+    class_weights = compute_class_weight('balanced', classes=classes, y=train_labels)
+    boost_factors = {0: 1.0, 1: 1.1, 2: 2.5}  # Strong boost for person class
+    enhanced_weights = []
+    for i, weight in enumerate(class_weights):
+        enhanced_weights.append(weight * boost_factors.get(i, 1.0))
+    return torch.FloatTensor(enhanced_weights)
+
+def get_weighted_sampler(dataset, class_weights):
+    """Create weighted random sampler for balanced training"""
+    sample_weights = []
+    for sample in dataset.samples:
+        label = sample['label']
+        sample_weights.append(class_weights[label].item())
+    sampler = WeightedRandomSampler(weights=sample_weights, num_samples=len(sample_weights), replacement=True)
+    return sampler
+
+class AdvancedMetricsTracker:
+    """Track comprehensive metrics for better monitoring"""
+    def __init__(self, num_classes=3, class_names=['bicycle', 'car', '1_person']):
+        self.num_classes = num_classes
+        self.class_names = class_names
+        self.reset()
+        
+    def reset(self):
+        self.all_preds = []
+        self.all_targets = []
+        self.losses = []
+        
+    def update(self, preds, targets, probs=None):
+        self.all_preds.extend(preds.cpu().numpy())
+        self.all_targets.extend(targets.cpu().numpy())
+        
+    def compute_metrics(self):
+        from sklearn.metrics import classification_report, f1_score, accuracy_score, precision_score, recall_score
+        preds = np.array(self.all_preds)
+        targets = np.array(self.all_targets)
+        accuracy = accuracy_score(targets, preds)
+        f1_macro = f1_score(targets, preds, average='macro')
+        f1_micro = f1_score(targets, preds, average='micro')
+        f1_weighted = f1_score(targets, preds, average='weighted')
+        precision_macro = precision_score(targets, preds, average='macro')
+        precision_micro = precision_score(targets, preds, average='micro')
+        precision_weighted = precision_score(targets, preds, average='weighted')
+        recall_macro = recall_score(targets, preds, average='macro')
+        recall_micro = recall_score(targets, preds, average='micro')
+        recall_weighted = recall_score(targets, preds, average='weighted')
+        from sklearn.metrics import confusion_matrix
+        cm = confusion_matrix(targets, preds, labels=list(range(self.num_classes)))
+        recall_per_class = []
+        for i in range(self.num_classes):
+            if cm[i, :].sum() > 0:
+                recall = cm[i, i] / cm[i, :].sum()
+                recall_per_class.append(recall)
+        balanced_acc = np.mean(recall_per_class) if recall_per_class else 0.0
+        f1_per_class = f1_score(targets, preds, average=None)
+        avg_loss = np.mean(self.losses) if self.losses else 0.0
+        metrics = {
+            'accuracy': accuracy, 'f1_macro': f1_macro, 'f1_micro': f1_micro, 'f1_weighted': f1_weighted,
+            'precision_macro': precision_macro, 'precision_micro': precision_micro, 'precision_weighted': precision_weighted,
+            'recall_macro': recall_macro, 'recall_micro': recall_micro, 'recall_weighted': recall_weighted,
+            'balanced_accuracy': balanced_acc, 'loss': avg_loss
+        }
+        for i, class_name in enumerate(self.class_names):
+            metrics[f'f1_{class_name}'] = f1_per_class[i] if i < len(f1_per_class) else 0.0
+        return metrics
+    
+    def compute(self):
+        return self.compute_metrics()
+
+ENHANCED_CONFIG = {
+    'focal_loss_gamma': 2.0, 'focal_loss_alpha': [0.8, 1.0, 2.0], 'learning_rate_max': 5e-5, 'learning_rate_min': 1e-6,
+    'warmup_epochs': 3, 'class_weight_boost': {'bicycle': 1.0, 'car': 1.1, '1_person': 2.5}, 'early_stopping_patience': 6,
+    'mixup_alpha': 0.4, 'balanced_sampling': True, 'monitor_metric': 'balanced_accuracy'
+}
+
+print("✅ Enhanced accuracy solutions integrated")
 
 # PRODUCTION: Enable cudnn benchmark for free GPU speedup
 torch.backends.cudnn.benchmark = True
@@ -1039,10 +1198,14 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, metrics,
         optimizer.step()
         
         # Step-wise scheduling only for PyTorch schedulers (not AdvancedLRScheduler)
-        if hasattr(scheduler, 'is_advanced_scheduler'):  # Our custom scheduler
-            pass  # AdvancedLRScheduler is called per-epoch, not per-step
-        else:
-            scheduler.step()  # PyTorch built-in schedulers
+        try:
+            if hasattr(scheduler, 'is_advanced_scheduler'):  # Our custom scheduler
+                pass  # AdvancedLRScheduler is called per-epoch, not per-step
+            elif hasattr(scheduler, 'step'):
+                scheduler.step()  # PyTorch built-in schedulers
+        except Exception as e:
+            print(f"⚠️ Batch-level scheduler step failed: {e}")
+            pass  # Continue training even if scheduler fails
         
         probs = F.softmax(outputs, dim=1)
         preds = torch.argmax(outputs, dim=1)
@@ -1218,10 +1381,24 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             # Enhanced scheduler step with validation accuracy
             if CONFIG.get('SCHEDULER') == 'adaptive':
                 try:
-                    current_lr = scheduler.step(epoch, val_m.get('balanced_accuracy', val_m.get('accuracy', 0.0)))
-                    print(f"📈 Adaptive LR: {current_lr:.2e}")
-                except:
-                    pass
+                    # Check if it's our AdvancedLRScheduler
+                    if hasattr(scheduler, 'is_advanced_scheduler'):
+                        current_lr = scheduler.step(epoch, val_m.get('balanced_accuracy', val_m.get('accuracy', 0.0)))
+                        if current_lr:
+                            print(f"📈 Adaptive LR: {current_lr:.2e}")
+                        else:
+                            print(f"📈 Adaptive LR: {scheduler.get_last_lr()[0]:.2e}")
+                    else:
+                        scheduler.step()
+                        print(f"📈 Standard scheduler step completed")
+                except Exception as e:
+                    print(f"⚠️ Scheduler step failed: {e}")
+                    # Try fallback scheduler step
+                    try:
+                        if hasattr(scheduler, 'step'):
+                            scheduler.step()
+                    except:
+                        print(f"⚠️ Fallback scheduler step also failed")
             
             # Enhanced early stopping
             current_val_metrics = {
@@ -1356,11 +1533,24 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             if val_m['accuracy'] > best_val_acc:
                 best_val_acc = val_m['accuracy']
                 checkpoint_path = f"{CONFIG['OUTPUT_DIR']}/best_model.pth"
+                
+                # Safe scheduler state_dict with fallback
+                scheduler_state = None
+                try:
+                    if hasattr(scheduler, 'state_dict'):
+                        scheduler_state = scheduler.state_dict()
+                    else:
+                        print(f"⚠️ Scheduler {type(scheduler).__name__} has no state_dict method")
+                        scheduler_state = {'warning': 'scheduler_state_not_available'}
+                except Exception as e:
+                    print(f"⚠️ Failed to get scheduler state: {e}")
+                    scheduler_state = {'error': str(e)}
+                
                 torch.save({
                     'epoch': epoch + 1,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                    'scheduler_state_dict': scheduler.state_dict(),
+                    'scheduler_state_dict': scheduler_state,
                     "val_accuracy": val_m['accuracy'],
                     "val_f1": val_m['f1_macro'],
                     "train_accuracy": train_m['accuracy'],
@@ -1421,8 +1611,14 @@ def evaluate_test(test_loader):
     if not os.path.exists(checkpoint_path):
         raise RuntimeError(f"Model not found: {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model.load_state_dict(checkpoint['model_state_dict'])
+    try:
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+    except Exception as e:
+        print(f"⚠️ Warning: Failed to load model checkpoint: {e}")
+        print(f"Available keys in checkpoint: {list(checkpoint.keys()) if 'checkpoint' in locals() else 'Unknown'}")
+        raise RuntimeError(f"Failed to load model from {checkpoint_path}: {e}")
+    
     model.eval()
     
     test_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
@@ -1576,8 +1772,15 @@ def predict_single(image_path, radar_path, csv_path=None, model_path=None):
         model_path = f"{CONFIG['OUTPUT_DIR']}/best_model.pth"
     
     if os.path.exists(model_path):
-        checkpoint = torch.load(model_path, map_location=device)
-        model.load_state_dict(checkpoint['model_state_dict'])
+        try:
+            checkpoint = torch.load(model_path, map_location=device)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"✓ Successfully loaded model from {model_path}")
+        except Exception as e:
+            print(f"⚠️ Warning: Failed to load model from {model_path}: {e}")
+            print(f"Continuing with randomly initialized weights...")
+    else:
+        print(f"⚠️ Model not found at {model_path}, using randomly initialized weights")
     
     model.eval()
     
