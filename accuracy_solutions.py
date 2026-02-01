@@ -258,15 +258,30 @@ class AdvancedMetricsTracker:
         self.losses.append(loss_value)
         
     def compute_metrics(self):
-        from sklearn.metrics import classification_report, f1_score, accuracy_score
+        from sklearn.metrics import classification_report, f1_score, accuracy_score, precision_score, recall_score
         
         preds = np.array(self.all_preds)
         targets = np.array(self.all_targets)
         
         # Basic metrics
         accuracy = accuracy_score(targets, preds)
+        
+        # F1 scores (macro, micro, weighted)
         f1_macro = f1_score(targets, preds, average='macro')
+        f1_micro = f1_score(targets, preds, average='micro')
         f1_weighted = f1_score(targets, preds, average='weighted')
+        
+        # Precision scores (macro, micro, weighted)
+        precision_macro = precision_score(targets, preds, average='macro')
+        precision_micro = precision_score(targets, preds, average='micro')
+        precision_weighted = precision_score(targets, preds, average='weighted')
+        
+        # Recall scores (macro, micro, weighted)
+        recall_macro = recall_score(targets, preds, average='macro')
+        recall_micro = recall_score(targets, preds, average='micro')
+        recall_weighted = recall_score(targets, preds, average='weighted')
+        
+        # Balanced accuracy
         balanced_acc = calculate_balanced_accuracy(targets, preds, self.num_classes)
         
         # Per-class F1 scores
@@ -278,7 +293,14 @@ class AdvancedMetricsTracker:
         metrics = {
             'accuracy': accuracy,
             'f1_macro': f1_macro,
+            'f1_micro': f1_micro,
             'f1_weighted': f1_weighted,
+            'precision_macro': precision_macro,
+            'precision_micro': precision_micro,
+            'precision_weighted': precision_weighted,
+            'recall_macro': recall_macro,
+            'recall_micro': recall_micro,
+            'recall_weighted': recall_weighted,
             'balanced_accuracy': balanced_acc,
             'loss': avg_loss
         }

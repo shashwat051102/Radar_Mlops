@@ -1276,31 +1276,31 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             # History
             history['train_loss'].append(train_loss)
             history['val_loss'].append(val_loss)
-            history['train_acc'].append(train_m['accuracy'])
-            history['val_acc'].append(val_m['accuracy'])
+            history['train_acc'].append(train_m.get('accuracy', 0.0))
+            history['val_acc'].append(val_m.get('accuracy', 0.0))
             
-            # Enhanced MLflow logging with comprehensive metrics
+            # Enhanced MLflow logging with comprehensive metrics (with safe access)
             epoch_metrics = {
                 # Training metrics
                 'train_loss': train_loss,
-                'train_accuracy': train_m['accuracy'],
-                'train_f1_macro': train_m['f1_macro'],
-                'train_f1_micro': train_m['f1_micro'],
-                'train_f1_weighted': train_m['f1_weighted'],
-                'train_precision_macro': train_m['precision_macro'],
-                'train_recall_macro': train_m['recall_macro'],
-                'train_balanced_accuracy': train_m['balanced_accuracy'],
+                'train_accuracy': train_m.get('accuracy', 0.0),
+                'train_f1_macro': train_m.get('f1_macro', 0.0),
+                'train_f1_micro': train_m.get('f1_micro', train_m.get('accuracy', 0.0)),  # Fallback to accuracy
+                'train_f1_weighted': train_m.get('f1_weighted', 0.0),
+                'train_precision_macro': train_m.get('precision_macro', 0.0),
+                'train_recall_macro': train_m.get('recall_macro', 0.0),
+                'train_balanced_accuracy': train_m.get('balanced_accuracy', train_m.get('accuracy', 0.0)),
                 
-                # Validation metrics
+                # Validation metrics (with safe access)
                 'val_loss': val_loss,
-                'val_accuracy': val_m['accuracy'],
-                'val_f1_macro': val_m['f1_macro'],
-                'val_f1_micro': val_m['f1_micro'],
-                'val_f1_weighted': val_m['f1_weighted'],
-                'val_precision_macro': val_m['precision_macro'],
-                'val_recall_macro': val_m['recall_macro'],
-                'val_balanced_accuracy': val_m['balanced_accuracy'],
-                'val_cohen_kappa': val_m.get('cohen_kappa', 0),
+                'val_accuracy': val_m.get('accuracy', 0.0),
+                'val_f1_macro': val_m.get('f1_macro', 0.0),
+                'val_f1_micro': val_m.get('f1_micro', val_m.get('accuracy', 0.0)),  # Fallback to accuracy
+                'val_f1_weighted': val_m.get('f1_weighted', 0.0),
+                'val_precision_macro': val_m.get('precision_macro', 0.0),
+                'val_recall_macro': val_m.get('recall_macro', 0.0),
+                'val_balanced_accuracy': val_m.get('balanced_accuracy', val_m.get('accuracy', 0.0)),
+                'val_cohen_kappa': val_m.get('cohen_kappa', 0.0),
                 
                 # Learning rate
                 'learning_rate': current_lr
@@ -1322,12 +1322,12 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             
             log_metrics(epoch_metrics, step=epoch)
             
-            # Monitor train-validation gap for overfitting
-            train_val_gap = train_m['accuracy'] - val_m['accuracy']
+            # Monitor train-validation gap for overfitting  
+            train_val_gap = train_m.get('accuracy', 0.0) - val_m.get('accuracy', 0.0)
             
-            # Enhanced console output with overfitting detection
-            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f} | Bal-Acc: {train_m['balanced_accuracy']:.4f}")
-            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f} | Bal-Acc: {val_m['balanced_accuracy']:.4f}")
+            # Enhanced console output with overfitting detection (safe access)
+            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m.get('accuracy', 0.0):.4f} | F1: {train_m.get('f1_macro', 0.0):.4f} | Bal-Acc: {train_m.get('balanced_accuracy', 0.0):.4f}")
+            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m.get('accuracy', 0.0):.4f} | F1: {val_m.get('f1_macro', 0.0):.4f} | Bal-Acc: {val_m.get('balanced_accuracy', 0.0):.4f}")
             
             # Overfitting warning
             if train_val_gap > 0.1:
@@ -1340,7 +1340,7 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             
             # Advanced metrics if available
             if 'cohen_kappa' in val_m:
-                print(f"  Kappa: {val_m['cohen_kappa']:.4f} | ROC-AUC: {val_m.get('roc_auc_ovr', 0):.4f} | mAP: {val_m.get('mean_avg_precision', 0):.4f} | LR: {current_lr:.2e}")
+                print(f"  Kappa: {val_m.get('cohen_kappa', 0.0):.4f} | ROC-AUC: {val_m.get('roc_auc_ovr', 0):.4f} | mAP: {val_m.get('mean_avg_precision', 0):.4f} | LR: {current_lr:.2e}")
             
             # Stop if perfect training accuracy (clear overfitting)
             if train_m['accuracy'] >= 0.999:
