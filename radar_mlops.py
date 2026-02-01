@@ -90,17 +90,17 @@ CONFIG = {
     
     # Model - AUTO-DETECTED from JSON
     "NUM_CLASSES": NUM_CLASSES,
-    "IMAGE_SIZE": 128,
-    "BACKBONE": "mobilenetv2_100",
+    "IMAGE_SIZE": 224,
+    "BACKBONE": "efficientnet_b3",
     
     # Training - Anti-overfitting settings
-    "EPOCHS": 10,
-    "BATCH_SIZE": 64,
+    "EPOCHS": 25,
+    "BATCH_SIZE": 16,
     "LEARNING_RATE": 2e-4,
     "WEIGHT_DECAY": 1e-2,
-    "WARMUP_EPOCHS": 1,
+    "WARMUP_EPOCHS": 3,
     "LABEL_SMOOTHING": 0.2,
-    "DROPOUT_RATE": 0.7,
+    "DROPOUT_RATE": 0.5,
     "NOISE_FACTOR": 0.1,
     
     # Classes - LOADED from JSON
@@ -670,57 +670,67 @@ class MultimodalModel(nn.Module):
             nn.AdaptiveAvgPool2d(1)
         )
         
-        rad_feat = 128  # Fixed by architecture
+        rad_feat = 256  # Updated for enhanced radar encoder
         
-        # Aggressive dropout to prevent overfitting
-        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.7)
+        # Enhanced projection layers with residual connections
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)  # Reduced for better performance
         self.img_proj = nn.Sequential(
-            nn.Linear(img_feat, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(img_feat, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate),
-            nn.Linear(256, 256),
+            nn.Linear(512, 384),
+            nn.BatchNorm1d(384),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.8)
+            nn.Dropout(dropout_rate * 0.5),
+            nn.Linear(384, 256)
         )
         self.rad_proj = nn.Sequential(
-            nn.Linear(rad_feat, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(rad_feat, 512),
+            nn.BatchNorm1d(512),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate),
-            nn.Linear(256, 256),
+            nn.Linear(512, 384),
+            nn.BatchNorm1d(384),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.8)
+            nn.Dropout(dropout_rate * 0.5),
+            nn.Linear(384, 256)
         )
         
-        # CSV feature processor
+        # Enhanced CSV feature processor
         self.csv_proj = nn.Sequential(
             nn.Linear(32, 128),  # 32 CSV features -> 128
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate),
+            nn.Dropout(dropout_rate * 0.3),
             nn.Linear(128, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.8)
+            nn.Dropout(dropout_rate * 0.4),
+            nn.Linear(256, 256)
         )
         
-        # LSTM with high dropout for trimodal fusion
-        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.7)
+        # Enhanced LSTM with multiple layers for better temporal modeling
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)
         self.lstm = nn.LSTM(
-            768, 256, num_layers=1, batch_first=True,  # 256+256+256 = 768 input
-            dropout=dropout_rate, bidirectional=True
+            768, 384, num_layers=2, batch_first=True,  # 256+256+256 = 768 input
+            dropout=dropout_rate * 0.6, bidirectional=True
         )
         
-        # Simpler classifier with stronger regularization
+        # Enhanced classifier with attention mechanism
         self.classifier = nn.Sequential(
+            nn.Linear(768, 512),  # 384*2 from bidirectional LSTM
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4),
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.6),
+            nn.Dropout(0.3),
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
+            nn.Dropout(0.2),
             nn.Linear(128, num_classes)
         )
         
