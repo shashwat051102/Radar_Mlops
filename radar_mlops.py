@@ -221,7 +221,7 @@ class RadarDataset(Dataset):
 
                 # Try common radar field names
                 radar = None
-                for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube']:
+                for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube', 'adcData']:
                     if field in radar_data:
                         radar = radar_data[field]
                         break
@@ -236,8 +236,20 @@ class RadarDataset(Dataset):
                 if radar is None:
                     radar = np.zeros((128, 255), dtype=np.float32)
                 else:
-                    if radar.ndim > 2:
+                    # Handle multi-dimensional radar data
+                    if radar.ndim > 3:
+                        # Take first channel if complex/multi-channel data
+                        radar = radar[:, :, 0, 0] if radar.ndim == 4 else radar[:, :, 0]
+                    elif radar.ndim == 3:
                         radar = radar[:, :, 0]
+
+                    # Ensure we have 2D data before resize
+                    if radar.ndim > 2:
+                        radar = radar.squeeze()
+                    
+                    # Handle complex data (take magnitude)
+                    if np.iscomplexobj(radar):
+                        radar = np.abs(radar)
 
                     radar = cv2.resize(radar.astype(np.float32), (255, 128))
                     radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
@@ -350,7 +362,7 @@ def load_dataset(dat_dir):
                 try:
                     radar_data = loadmat(radar_path)
                     # Try common radar field names
-                    for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube']:
+                    for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube', 'adcData']:
                         if field in radar_data:
                             return True
                     # Check if any non-header field exists
