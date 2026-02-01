@@ -203,8 +203,8 @@ class RadarDataset(Dataset):
                 transforms.RandomRotation(30),  # Increased rotation
                 transforms.RandomHorizontalFlip(0.6),  # Increased flip probability
                 transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.15),  # Stronger jitter
-                transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),  # Random erasing
-                transforms.ToTensor()
+                transforms.ToTensor(),
+                transforms.RandomErasing(p=0.2, scale=(0.02, 0.1))  # Random erasing after ToTensor
             ])
         else:
             self.img_transform = transforms.Compose([
