@@ -68,7 +68,14 @@ class AdvancedLRScheduler:
         self.best_val_acc = 0.0
         self.epochs_without_improvement = 0
         
-    def step(self, epoch, val_acc=None):
+        # Identifier for compatibility checks
+        self.is_advanced_scheduler = True
+        
+    def step(self, epoch=None, val_acc=None):
+        # Handle calls without parameters (for compatibility)
+        if epoch is None:
+            return  # Skip step if no epoch provided
+            
         self.current_epoch = epoch
         
         if epoch < self.warmup_epochs:

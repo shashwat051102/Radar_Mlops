@@ -1033,7 +1033,12 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, metrics,
         utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         
         optimizer.step()
-        scheduler.step()  # Step-wise scheduling
+        
+        # Step-wise scheduling only for PyTorch schedulers (not AdvancedLRScheduler)
+        if hasattr(scheduler, 'is_advanced_scheduler'):  # Our custom scheduler
+            pass  # AdvancedLRScheduler is called per-epoch, not per-step
+        else:
+            scheduler.step()  # PyTorch built-in schedulers
         
         probs = F.softmax(outputs, dim=1)
         preds = torch.argmax(outputs, dim=1)
