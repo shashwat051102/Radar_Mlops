@@ -36,7 +36,7 @@ jobs:
   train:
     needs: test
     runs-on: ubuntu-latest   # change later to GPU runner
-    timeout-minutes: 600     # VERY IMPORTANT (large training)
+    timeout-minutes: 720     # 12 hours for enhanced training with EfficientNet-B3
 
     steps:
       - uses: actions/checkout@v3
@@ -105,12 +105,19 @@ jobs:
 
 # TRAIN
 
-      - name: Train Model
+      - name: Train Model (High-Quality CI)
         env:
           ENABLE_MLFLOW: "true"
           DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
+          # High-quality CI training with time constraints
+          EPOCHS: "5"              # Quick but thorough training
+          BATCH_SIZE: "8"          # Smaller for CI memory constraints
+          IMAGE_SIZE: "224"        # Full resolution for quality
+          BACKBONE: "efficientnet_b3"  # Full model for quality
         run: |
+          echo "🚀 Starting high-quality CI training..."
+          echo "⚡ Config: 5 epochs, EfficientNet-B3, 224px images"
           python radar_mlops.py
 
 

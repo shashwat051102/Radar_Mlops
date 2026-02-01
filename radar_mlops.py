@@ -88,14 +88,14 @@ CONFIG = {
     "DATA_DIR": "data/raw",
     "OUTPUT_DIR": "data/processed",
     
-    # Model - AUTO-DETECTED from JSON
+    # Model - CI environment override support
     "NUM_CLASSES": NUM_CLASSES,
-    "IMAGE_SIZE": 224,
-    "BACKBONE": "efficientnet_b3",
+    "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
+    "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b3"),  # CI: efficientnet_b3, Local: efficientnet_b3
     
-    # Training - Anti-overfitting settings
-    "EPOCHS": 25,
-    "BATCH_SIZE": 16,
+    # Training - Anti-overfitting settings with CI overrides
+    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # CI: 5, Local: 25
+    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
     "LEARNING_RATE": 2e-4,
     "WEIGHT_DECAY": 1e-2,
     "WARMUP_EPOCHS": 3,
