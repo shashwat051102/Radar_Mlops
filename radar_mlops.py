@@ -97,13 +97,13 @@ CONFIG = {
     "EPOCHS": int(os.environ.get('EPOCHS', 20)),  # Extended training: CI: 10, Local: 20
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
     "LEARNING_RATE": 3e-5,  # Further reduced learning rate
-    "WEIGHT_DECAY": 8e-2,  # Stronger weight decay
+    "WEIGHT_DECAY": 6e-2,  # Balanced weight decay
     "WARMUP_EPOCHS": 3,
-    "LABEL_SMOOTHING": 0.3,  # Increased label smoothing
-    "DROPOUT_RATE": 0.8,  # Maximum dropout
-    "NOISE_FACTOR": 0.3,  # Enhanced augmentation
+    "LABEL_SMOOTHING": 0.25,  # Balanced label smoothing
+    "DROPOUT_RATE": 0.6,  # Optimal dropout level
+    "NOISE_FACTOR": 0.25,  # Balanced augmentation
     "GRADIENT_CLIP": 1.0,  # Gradient clipping
-    "MIXUP_ALPHA": 0.4,  # Mixup augmentation
+    "MIXUP_ALPHA": 0.3,  # Balanced mixup
     "SCHEDULER": "cosine",  # Learning rate scheduling
     
     # Classes - LOADED from JSON
