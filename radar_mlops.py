@@ -239,15 +239,15 @@ class RadarDataset(Dataset):
         
         # Apply augmentations if training
         if self.is_training and self.img_transform:
-            image = self.img_transform(image.astype(np.uint8))
-            image = image.permute(1, 2, 0).numpy()
+            image = self.img_transform(image)  # Transforms handle uint8 conversion and normalization
             
-            # Add noise to prevent overfitting
+            # Add noise to prevent overfitting (to tensor)
             noise_factor = CONFIG.get('NOISE_FACTOR', 0.1)
-            noise = np.random.normal(0, noise_factor, image.shape)
-            image = np.clip(image + noise, 0, 1)
+            noise = torch.normal(0, noise_factor, image.shape)
+            image = torch.clamp(image + noise, 0, 1)
         else:
-            image = image.astype(np.float32) / 255.0
+            # Convert to tensor for non-training
+            image = torch.from_numpy(image.astype(np.float32) / 255.0).permute(2, 0, 1)
 
         # ---------------- RADAR ----------------
 
@@ -326,7 +326,10 @@ class RadarDataset(Dataset):
 
         # ---------------- TENSORS ----------------
 
-        image = torch.from_numpy(image).permute(2, 0, 1).float()
+        # Image is already a tensor from augmentations or converted above
+        if not torch.is_tensor(image):
+            image = torch.from_numpy(image).permute(2, 0, 1).float()
+        
         radar = torch.from_numpy(radar).unsqueeze(0).float()
         csv_features = torch.from_numpy(csv_features).float()
         label = torch.tensor(sample['label'], dtype=torch.long)
