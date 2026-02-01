@@ -93,13 +93,15 @@ CONFIG = {
     "IMAGE_SIZE": 128,
     "BACKBONE": "mobilenetv2_100",
     
-    # Training
-    "EPOCHS": 15,
-    "BATCH_SIZE": 32,
-    "LEARNING_RATE": 1e-4,
-    "WEIGHT_DECAY": 5e-4,
-    "WARMUP_EPOCHS": 2,
-    "LABEL_SMOOTHING": 0.15,
+    # Training - Anti-overfitting settings
+    "EPOCHS": 10,
+    "BATCH_SIZE": 64,
+    "LEARNING_RATE": 2e-4,
+    "WEIGHT_DECAY": 1e-2,
+    "WARMUP_EPOCHS": 1,
+    "LABEL_SMOOTHING": 0.2,
+    "DROPOUT_RATE": 0.7,
+    "NOISE_FACTOR": 0.1,
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -215,6 +217,7 @@ class RadarDataset(Dataset):
 
         image_path = sample["image"]
         radar_path = sample.get("radar")
+        csv_path = sample.get("csv")
 
         # HARD FAIL if image file missing
         if not os.path.exists(image_path):
@@ -234,6 +237,11 @@ class RadarDataset(Dataset):
         if self.is_training and self.img_transform:
             image = self.img_transform(image.astype(np.uint8))
             image = image.permute(1, 2, 0).numpy()
+            
+            # Add noise to prevent overfitting
+            noise_factor = CONFIG.get('NOISE_FACTOR', 0.1)
+            noise = np.random.normal(0, noise_factor, image.shape)
+            image = np.clip(image + noise, 0, 1)
         else:
             image = image.astype(np.float32) / 255.0
 
@@ -285,15 +293,44 @@ class RadarDataset(Dataset):
             except Exception as e:
                 radar = np.zeros((128, 255), dtype=np.float32)
 
+        # ---------------- CSV FEATURES ----------------
+        
+        # Load CSV features if available
+        if csv_path is not None and os.path.exists(csv_path):
+            try:
+                # Read CSV file
+                csv_data = pd.read_csv(csv_path, header=None)
+                
+                # Convert to numpy array and flatten
+                csv_features = csv_data.values.flatten().astype(np.float32)
+                
+                # Pad or truncate to fixed size (let's use 32 features max)
+                target_size = 32
+                if len(csv_features) > target_size:
+                    csv_features = csv_features[:target_size]
+                elif len(csv_features) < target_size:
+                    # Pad with zeros
+                    padding = np.zeros(target_size - len(csv_features), dtype=np.float32)
+                    csv_features = np.concatenate([csv_features, padding])
+                    
+            except Exception as e:
+                # If CSV loading fails, use zero features
+                csv_features = np.zeros(32, dtype=np.float32)
+        else:
+            # No CSV file, use zero features
+            csv_features = np.zeros(32, dtype=np.float32)
+
         # ---------------- TENSORS ----------------
 
-        image = torch.from_numpy(image).permute(2, 0, 1)
-        radar = torch.from_numpy(radar).unsqueeze(0)
+        image = torch.from_numpy(image).permute(2, 0, 1).float()
+        radar = torch.from_numpy(radar).unsqueeze(0).float()
+        csv_features = torch.from_numpy(csv_features).float()
         label = torch.tensor(sample['label'], dtype=torch.long)
 
         return {
             "image": image,
             "radar": radar,
+            "csv": csv_features,
             "label": label
         }
 
@@ -635,30 +672,43 @@ class MultimodalModel(nn.Module):
         
         rad_feat = 128  # Fixed by architecture
         
-        # Simpler feature projection to reduce overfitting
+        # Aggressive dropout to prevent overfitting
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.7)
         self.img_proj = nn.Sequential(
             nn.Linear(img_feat, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
+            nn.Dropout(dropout_rate),
             nn.Linear(256, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4)
+            nn.Dropout(dropout_rate * 0.8)
         )
         self.rad_proj = nn.Sequential(
             nn.Linear(rad_feat, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.5),
+            nn.Dropout(dropout_rate),
             nn.Linear(256, 256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4)
+            nn.Dropout(dropout_rate * 0.8)
         )
         
-        # Simpler LSTM feature
+        # CSV feature processor
+        self.csv_proj = nn.Sequential(
+            nn.Linear(32, 128),  # 32 CSV features -> 128
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_rate),
+            nn.Linear(128, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout_rate * 0.8)
+        )
+        
+        # LSTM with high dropout for trimodal fusion
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.7)
         self.lstm = nn.LSTM(
-            512, 256, num_layers=1, batch_first=True, 
-            dropout=0.5, bidirectional=True
+            768, 256, num_layers=1, batch_first=True,  # 256+256+256 = 768 input
+            dropout=dropout_rate, bidirectional=True
         )
         
         # Simpler classifier with stronger regularization
@@ -674,13 +724,14 @@ class MultimodalModel(nn.Module):
             nn.Linear(128, num_classes)
         )
         
-    def forward(self, image, radar):
-        # Extract features
+    def forward(self, image, radar, csv_features):
+        # Extract features from all modalities
         img_feat = self.img_proj(self.image_encoder(image))
         rad_feat = self.rad_proj(self.radar_encoder(radar).flatten(1))
+        csv_feat = self.csv_proj(csv_features)
         
-        # Fuse and LSTM
-        fused = torch.cat([img_feat, rad_feat], dim=1).unsqueeze(1)
+        # Trimodal fusion
+        fused = torch.cat([img_feat, rad_feat, csv_feat], dim=1).unsqueeze(1)
         lstm_out, _ = self.lstm(fused)
         
         return self.classifier(lstm_out.squeeze(1))
@@ -875,10 +926,11 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, metrics,
     for batch_idx, batch in enumerate(tqdm(loader, desc=f"Training Epoch {epoch}")):
         images = batch['image'].to(device, non_blocking=True)
         radars = batch['radar'].to(device, non_blocking=True)
+        csv_features = batch['csv'].to(device, non_blocking=True)
         labels = batch['label'].to(device, non_blocking=True)
         
         optimizer.zero_grad()
-        outputs = model(images, radars)
+        outputs = model(images, radars, csv_features)
         loss = criterion(outputs, labels)
         loss.backward()
         
@@ -906,9 +958,10 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
         for batch in tqdm(loader, desc=f"Validating Epoch {epoch}"):
             images = batch['image'].to(device, non_blocking=True)
             radars = batch['radar'].to(device, non_blocking=True)
+            csv_features = batch['csv'].to(device, non_blocking=True)
             labels = batch['label'].to(device, non_blocking=True)
             
-            outputs = model(images, radars)
+            outputs = model(images, radars, csv_features)
             loss = criterion(outputs, labels)
             
             probs = F.softmax(outputs, dim=1)
@@ -1051,9 +1104,16 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             
             log_metrics(epoch_metrics, step=epoch)
             
-            # Enhanced console output with comprehensive metrics
+            # Monitor train-validation gap for overfitting
+            train_val_gap = train_m['accuracy'] - val_m['accuracy']
+            
+            # Enhanced console output with overfitting detection
             print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f} | Bal-Acc: {train_m['balanced_accuracy']:.4f}")
             print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f} | Bal-Acc: {val_m['balanced_accuracy']:.4f}")
+            
+            # Overfitting warning
+            if train_val_gap > 0.1:
+                print(f"  ⚠️  OVERFITTING DETECTED: Train-Val gap = {train_val_gap:.4f}")
             
             # Per-class F1 scores
             class_names = list(CONFIG['CLASS_MAPPING'].values())
@@ -1064,6 +1124,16 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             if 'cohen_kappa' in val_m:
                 print(f"  Kappa: {val_m['cohen_kappa']:.4f} | ROC-AUC: {val_m.get('roc_auc_ovr', 0):.4f} | mAP: {val_m.get('mean_avg_precision', 0):.4f} | LR: {current_lr:.2e}")
             
+            # Stop if perfect training accuracy (clear overfitting)
+            if train_m['accuracy'] >= 0.999:
+                print(f"\n🛑  STOPPING: Perfect training accuracy detected (overfitting)")
+                break
+                
+            # Monitor train-validation gap for overfitting
+            train_val_gap = train_m['accuracy'] - val_m['accuracy']
+            if train_val_gap > 0.15:
+                print(f"\n⚠️  OVERFITTING WARNING: Train-Val accuracy gap = {train_val_gap:.4f}")
+                
             # Save best model with enhanced checkpoint
             if val_m['accuracy'] > best_val_acc:
                 best_val_acc = val_m['accuracy']
@@ -1083,14 +1153,31 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
                 log_model(model, "best_model")
                 print(f"  ✅ New best model saved! Val Acc: {best_val_acc:.4f}")
                 
-                # Early stopping check (more conservative)
+                # Aggressive early stopping (validation-based)
                 epochs_without_improvement = 0
+                
+                # Also track if validation loss is increasing (overfitting signal)
+                if 'best_val_loss' not in locals():
+                    best_val_loss = val_loss
+                elif val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    
             else:
                 epochs_without_improvement += 1
                 
-            # Early stopping after fewer epochs
-            if epochs_without_improvement >= 5:
-                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 5 epochs)")
+            # Stop if validation loss increases significantly
+            if val_loss > best_val_loss * 1.1:
+                print(f"\n☠️  STOPPING: Validation loss increased significantly (overfitting)")
+                break
+                
+            # Very aggressive early stopping
+            if epochs_without_improvement >= 3:
+                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 3 epochs)")
+                break
+                
+            # Stop if perfect training accuracy (clear overfitting)
+            if train_m['accuracy'] >= 0.999:
+                print(f"\n🛑  STOPPING: Perfect training accuracy detected (overfitting)")
                 break
         
         log_model(model, "final_model")
@@ -1127,9 +1214,10 @@ def evaluate_test(test_loader):
         for batch in tqdm(test_loader, desc="Testing"):
             images = batch['image'].to(device, non_blocking=True)
             radars = batch['radar'].to(device, non_blocking=True)
+            csv_features = batch['csv'].to(device, non_blocking=True)
             labels = batch['label'].to(device, non_blocking=True)
             
-            outputs = model(images, radars)
+            outputs = model(images, radars, csv_features)
             probs = F.softmax(outputs, dim=1)
             preds = torch.argmax(outputs, dim=1)
             
@@ -1261,8 +1349,8 @@ def evaluate_test(test_loader):
     return metrics
 
 
-def predict_single(image_path, radar_path, model_path=None):
-    """Production inference function"""
+def predict_single(image_path, radar_path, csv_path=None, model_path=None):
+    """Trimodal inference function"""
     
     model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
     
@@ -1293,9 +1381,27 @@ def predict_single(image_path, radar_path, model_path=None):
     
     radar = torch.from_numpy(radar).unsqueeze(0).unsqueeze(0).to(device)
     
+    # Load CSV features if provided
+    if csv_path and os.path.exists(csv_path):
+        try:
+            csv_data = pd.read_csv(csv_path, header=None)
+            csv_features = csv_data.values.flatten().astype(np.float32)
+            # Pad/truncate to 32 features
+            if len(csv_features) > 32:
+                csv_features = csv_features[:32]
+            elif len(csv_features) < 32:
+                padding = np.zeros(32 - len(csv_features))
+                csv_features = np.concatenate([csv_features, padding])
+        except:
+            csv_features = np.zeros(32, dtype=np.float32)
+    else:
+        csv_features = np.zeros(32, dtype=np.float32)
+    
+    csv_features = torch.from_numpy(csv_features).unsqueeze(0).to(device)
+    
     # Predict
     with torch.no_grad():
-        output = model(image, radar)
+        output = model(image, radar, csv_features)
         probs = F.softmax(output, dim=1)
         pred = probs.argmax(dim=1).item()
         conf = probs.max().item()
