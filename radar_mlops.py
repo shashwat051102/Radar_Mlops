@@ -212,9 +212,8 @@ class RadarDataset(Dataset):
         # ---------------- RADAR ----------------
 
         # If radar path is missing (allowed), generate a placeholder radar array
+        # Do not spam per-sample warnings here — load_dataset aggregates missing counts.
         if radar_path is None or not os.path.exists(radar_path):
-            # Log a warning and create a zero radar map placeholder
-            print(f"Warning: missing radar for image {image_path}. Using zero radar placeholder.")
             radar = np.zeros((128, 255), dtype=np.float32)
         else:
             try:
@@ -289,31 +288,100 @@ def load_dataset(dat_dir):
             if not scenario.is_dir():
                 continue
 
-            images_path = scenario / "images"
-            radar_path = scenario / "radar"
+            # Auto-detect common image and radar folder names (some recordings use images_0 / radar_raw_frame)
+            image_candidates = ["images", "images_0", "images_1"]
+            radar_candidates = ["radar", "radar_raw_frame", "radar_raw", "radar_frame"]
 
-            if not images_path.exists():
-                raise RuntimeError(
-                    f"Images folder missing in {scenario}"
-                )
+            images_path = None
+            for c in image_candidates:
+                p = scenario / c
+                if p.exists() and p.is_dir():
+                    images_path = p
+                    break
+
+            if images_path is None:
+                raise RuntimeError(f"Images folder missing in {scenario} (looked for {image_candidates})")
+
+            radar_folder = None
+            for c in radar_candidates:
+                p = scenario / c
+                if p.exists() and p.is_dir():
+                    radar_folder = p
+                    break
+
+            # Iterate images; map each image to a radar .mat and optional csv if present
+            missing_radar_local = 0
+            csv_present_local = 0
+            csv_candidates = ["csv", "annotations", "labels"]
+
+            # helper: search for csv matching the image stem in likely locations
+            def find_csv_for_image(img_path):
+                # 1) same folder as image
+                cand = img_path.with_suffix('.csv')
+                if cand.exists():
+                    return str(cand)
+
+                # 2) scenario-level csv with same stem
+                for c in csv_candidates:
+                    p = scenario / c / f"{img_path.stem}.csv"
+                    if p.exists():
+                        return str(p)
+
+                # 3) scenario root csv filename matching stem
+                p = scenario / f"{img_path.stem}.csv"
+                if p.exists():
+                    return str(p)
+
+                return None
 
             for img_file in images_path.glob("*.jpg"):
+                rad_file = None
+                if radar_folder is not None:
+                    # Try exact match first
+                    candidate = radar_folder / f"{img_file.stem}.mat"
+                    if candidate.exists():
+                        rad_file = str(candidate)
+                    else:
+                        # Handle numbering mismatch: images use 0000000003.jpg, radar uses 000003.mat
+                        # Extract numeric part and try shorter format
+                        try:
+                            img_num = int(img_file.stem)
+                            short_name = f"{img_num:06d}.mat"  # 6-digit format
+                            candidate_short = radar_folder / short_name
+                            if candidate_short.exists():
+                                rad_file = str(candidate_short)
+                        except ValueError:
+                            pass  # Non-numeric filename, skip
 
-                rad_file = radar_path / f"{img_file.stem}.mat"
-
-                # Allow missing radar files but warn — dataset may be partially labeled
-                if not rad_file.exists():
-                    print(f"Warning: radar file not found for image {img_file}. Using placeholder radar array.")
+                if rad_file is None:
+                    # mark missing; load_dataset will report counts after building samples
                     radar_val = None
+                    missing_radar_local += 1
                 else:
-                    radar_val = str(rad_file)
+                    radar_val = rad_file
+
+                csv_file = find_csv_for_image(img_file)
+                if csv_file is not None:
+                    csv_present_local += 1
 
                 samples.append({
                     'image': str(img_file),
                     'radar': radar_val,
+                    'csv': csv_file,
                     'label': class_idx,
                     'class_name': class_name
                 })
+
+            # Aggregate per-scenario missing counts into running counters
+            if missing_radar_local > 0:
+                if 'missing_radar_count' not in locals():
+                    missing_radar_count = 0
+                missing_radar_count += missing_radar_local
+
+            if csv_present_local > 0:
+                if 'csv_present_count' not in locals():
+                    csv_present_count = 0
+                csv_present_count += csv_present_local
 
     # Ensure all classes exist
     if missing_classes:
@@ -327,6 +395,12 @@ def load_dataset(dat_dir):
         raise RuntimeError(
             "Dataset loaded ZERO samples - check DVC remote."
         )
+
+    # Print aggregated missing radar summary
+    total_samples = len(samples)
+    missing = locals().get('missing_radar_count', 0)
+    if missing > 0:
+        print(f"\nMissing radar files: {missing} / {total_samples} (zero placeholders will be used)")
 
     # -------- Class distribution --------
 
