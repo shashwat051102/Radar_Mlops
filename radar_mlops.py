@@ -273,22 +273,22 @@ CONFIG = {
     "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
     # Training - Enhanced accuracy and class balance settings
-    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # Extended for convergence: CI: 12, Local: 25
+    "EPOCHS": int(os.environ.get('EPOCHS', 35)),  # Increased for better convergence: CI: 15, Local: 35
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
-    "LEARNING_RATE": 5e-5,  # Increased from 3e-5 for better convergence
-    "LEARNING_RATE_MIN": 1e-6,  # Minimum LR for adaptive scheduling
-    "WEIGHT_DECAY": 4e-2,  # Reduced slightly for better learning
-    "WARMUP_EPOCHS": 4,  # Extended warmup
-    "LABEL_SMOOTHING": 0.2,  # Reduced for better class distinction
-    "DROPOUT_RATE": 0.5,  # Reduced from 0.6 for better capacity
-    "NOISE_FACTOR": 0.2,  # Reduced augmentation noise
+    "LEARNING_RATE": 3e-5,  # Optimized for stable training
+    "LEARNING_RATE_MIN": 5e-7,  # Lower minimum LR for fine-tuning
+    "WEIGHT_DECAY": 2e-2,  # Balanced regularization
+    "WARMUP_EPOCHS": 5,  # Extended warmup for stability
+    "LABEL_SMOOTHING": 0.15,  # Optimized for class balance
+    "DROPOUT_RATE": 0.4,  # Reduced for better learning capacity
+    "NOISE_FACTOR": 0.15,  # Moderate augmentation
     "GRADIENT_CLIP": 1.0,  # Gradient clipping
-    "MIXUP_ALPHA": 0.4,  # Stronger mixup for better generalization
+    "MIXUP_ALPHA": 0.3,  # Moderate mixup for generalization
     "SCHEDULER": "adaptive",  # Advanced adaptive scheduling
     "FOCAL_LOSS_GAMMA": 2.0,  # Focal loss for class imbalance
-    "CLASS_BOOST_PERSON": 2.5,  # Strong boost for person class
+    "CLASS_BOOST_PERSON": 3.0,  # Stronger boost for person class
     "BALANCED_SAMPLING": True,  # Enable balanced sampling
-    "EARLY_STOPPING_PATIENCE": 6,  # More patience for convergence
+    "EARLY_STOPPING_PATIENCE": 8,  # More patience for convergence
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -1573,19 +1573,20 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             else:
                 epochs_without_improvement += 1
                 
-            # Stop if validation loss increases significantly
-            if val_loss > best_val_loss * 1.1:
-                print(f"\n☠️  STOPPING: Validation loss increased significantly (overfitting)")
+            # Only stop if validation loss increases dramatically (not just 10%)
+            # Allow some fluctuation for natural learning
+            if val_loss > best_val_loss * 1.5 and epoch > 10:
+                print(f"\n☠️  STOPPING: Validation loss increased dramatically (overfitting after epoch 10)")
                 break
                 
-            # Very aggressive early stopping
-            if epochs_without_improvement >= 3:
-                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 3 epochs)")
+            # More patient early stopping - allow time for convergence
+            if epochs_without_improvement >= CONFIG.get('EARLY_STOPPING_PATIENCE', 8):
+                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for {CONFIG.get('EARLY_STOPPING_PATIENCE', 8)} epochs)")
                 break
                 
-            # Stop if perfect training accuracy (clear overfitting)
-            if train_m['accuracy'] >= 0.999:
-                print(f"\n🛑  STOPPING: Perfect training accuracy detected (overfitting)")
+            # Stop only if perfect training accuracy AND high overfitting
+            if train_m['accuracy'] >= 0.999 and (train_m['accuracy'] - val_m['accuracy']) > 0.3:
+                print(f"\n🛑  STOPPING: Perfect training accuracy with severe overfitting detected")
                 break
         
         log_model(model, "final_model")
