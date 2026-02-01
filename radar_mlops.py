@@ -219,20 +219,30 @@ class RadarDataset(Dataset):
             try:
                 radar_data = loadmat(radar_path)
 
-                radar = radar_data.get('data_cube', radar_data.get('radar'))
+                # Try common radar field names
+                radar = None
+                for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube']:
+                    if field in radar_data:
+                        radar = radar_data[field]
+                        break
+                
+                # If still no radar found, try the first non-header field
+                if radar is None:
+                    # Skip matlab metadata fields
+                    data_fields = [k for k in radar_data.keys() if not k.startswith('__')]
+                    if data_fields:
+                        radar = radar_data[data_fields[0]]
 
                 if radar is None:
-                    print(f"Warning: No radar array inside {radar_path}; using zeros.")
                     radar = np.zeros((128, 255), dtype=np.float32)
+                else:
+                    if radar.ndim > 2:
+                        radar = radar[:, :, 0]
 
-                if radar.ndim > 2:
-                    radar = radar[:, :, 0]
-
-                radar = cv2.resize(radar.astype(np.float32), (255, 128))
-                radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
+                    radar = cv2.resize(radar.astype(np.float32), (255, 128))
+                    radar = (radar - radar.min()) / (radar.max() - radar.min() + 1e-8)
 
             except Exception as e:
-                print(f"Warning: failed reading radar {radar_path}: {e}. Using zeros.")
                 radar = np.zeros((128, 255), dtype=np.float32)
 
         # ---------------- TENSORS ----------------
@@ -311,6 +321,7 @@ def load_dataset(dat_dir):
 
             # Iterate images; map each image to a radar .mat and optional csv if present
             missing_radar_local = 0
+            corrupted_radar_local = 0
             csv_present_local = 0
             csv_candidates = ["csv", "annotations", "labels"]
 
@@ -334,13 +345,31 @@ def load_dataset(dat_dir):
 
                 return None
 
+            # helper: check if radar file contains valid data
+            def check_radar_validity(radar_path):
+                try:
+                    radar_data = loadmat(radar_path)
+                    # Try common radar field names
+                    for field in ['data_cube', 'radar', 'range_doppler', 'rd_map', 'data', 'cube']:
+                        if field in radar_data:
+                            return True
+                    # Check if any non-header field exists
+                    data_fields = [k for k in radar_data.keys() if not k.startswith('__')]
+                    return len(data_fields) > 0
+                except:
+                    return False
+
             for img_file in images_path.glob("*.jpg"):
                 rad_file = None
                 if radar_folder is not None:
                     # Try exact match first
                     candidate = radar_folder / f"{img_file.stem}.mat"
                     if candidate.exists():
-                        rad_file = str(candidate)
+                        if check_radar_validity(candidate):
+                            rad_file = str(candidate)
+                        else:
+                            corrupted_radar_local += 1
+                            rad_file = None
                     else:
                         # Handle numbering mismatch: images use 0000000003.jpg, radar uses 000003.mat
                         # Extract numeric part and try shorter format
@@ -349,16 +378,17 @@ def load_dataset(dat_dir):
                             short_name = f"{img_num:06d}.mat"  # 6-digit format
                             candidate_short = radar_folder / short_name
                             if candidate_short.exists():
-                                rad_file = str(candidate_short)
+                                if check_radar_validity(candidate_short):
+                                    rad_file = str(candidate_short)
+                                else:
+                                    corrupted_radar_local += 1
+                                    rad_file = None
+                            else:
+                                missing_radar_local += 1
                         except ValueError:
-                            pass  # Non-numeric filename, skip
-
-                if rad_file is None:
-                    # mark missing; load_dataset will report counts after building samples
-                    radar_val = None
-                    missing_radar_local += 1
+                            missing_radar_local += 1  # Non-numeric filename, skip
                 else:
-                    radar_val = rad_file
+                    missing_radar_local += 1
 
                 csv_file = find_csv_for_image(img_file)
                 if csv_file is not None:
@@ -366,7 +396,7 @@ def load_dataset(dat_dir):
 
                 samples.append({
                     'image': str(img_file),
-                    'radar': radar_val,
+                    'radar': rad_file,
                     'csv': csv_file,
                     'label': class_idx,
                     'class_name': class_name
@@ -377,6 +407,11 @@ def load_dataset(dat_dir):
                 if 'missing_radar_count' not in locals():
                     missing_radar_count = 0
                 missing_radar_count += missing_radar_local
+
+            if corrupted_radar_local > 0:
+                if 'corrupted_radar_count' not in locals():
+                    corrupted_radar_count = 0
+                corrupted_radar_count += corrupted_radar_local
 
             if csv_present_local > 0:
                 if 'csv_present_count' not in locals():
@@ -399,8 +434,9 @@ def load_dataset(dat_dir):
     # Print aggregated missing radar summary
     total_samples = len(samples)
     missing = locals().get('missing_radar_count', 0)
-    if missing > 0:
-        print(f"\nMissing radar files: {missing} / {total_samples} (zero placeholders will be used)")
+    corrupted = locals().get('corrupted_radar_count', 0)
+    if missing > 0 or corrupted > 0:
+        print(f"\nRadar file status: {missing} missing, {corrupted} corrupted / {total_samples} total (zero placeholders will be used)")
 
     # -------- Class distribution --------
 
