@@ -145,7 +145,12 @@ def get_balanced_class_weights(train_labels, num_classes=3):
     from sklearn.utils.class_weight import compute_class_weight
     classes = np.arange(num_classes)
     class_weights = compute_class_weight('balanced', classes=classes, y=train_labels)
-    boost_factors = {0: 1.0, 1: 1.1, 2: 2.5}  # Strong boost for person class
+    # Apply stronger boosting for failing classes: car (F1=0.0) and person
+    boost_factors = {
+        0: 1.0,  # bicycle - baseline
+        1: CONFIG.get('CLASS_BOOST_CAR', 2.0),   # car - strong boost (failing)
+        2: CONFIG.get('CLASS_BOOST_PERSON', 4.0) # person - very strong boost
+    }
     enhanced_weights = []
     for i, weight in enumerate(class_weights):
         enhanced_weights.append(weight * boost_factors.get(i, 1.0))
@@ -272,23 +277,24 @@ CONFIG = {
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
     "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
-    # Training - Enhanced accuracy and class balance settings
-    "EPOCHS": int(os.environ.get('EPOCHS', 35)),  # Increased for better convergence: CI: 15, Local: 35
-    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
-    "LEARNING_RATE": 3e-5,  # Optimized for stable training
-    "LEARNING_RATE_MIN": 5e-7,  # Lower minimum LR for fine-tuning
-    "WEIGHT_DECAY": 2e-2,  # Balanced regularization
-    "WARMUP_EPOCHS": 5,  # Extended warmup for stability
-    "LABEL_SMOOTHING": 0.15,  # Optimized for class balance
-    "DROPOUT_RATE": 0.4,  # Reduced for better learning capacity
-    "NOISE_FACTOR": 0.15,  # Moderate augmentation
-    "GRADIENT_CLIP": 1.0,  # Gradient clipping
-    "MIXUP_ALPHA": 0.3,  # Moderate mixup for generalization
+    # Training - ENHANCED anti-overfitting and class balance settings
+    "EPOCHS": int(os.environ.get('EPOCHS', 30)),  # Optimized training length
+    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 12)),  # Smaller batch for better generalization
+    "LEARNING_RATE": 1e-5,  # Much lower LR for stable training
+    "LEARNING_RATE_MIN": 1e-7,  # Lower minimum LR
+    "WEIGHT_DECAY": 8e-2,  # Stronger regularization
+    "WARMUP_EPOCHS": 3,  # Shorter warmup
+    "LABEL_SMOOTHING": 0.3,  # Stronger label smoothing
+    "DROPOUT_RATE": 0.6,  # Stronger dropout
+    "NOISE_FACTOR": 0.1,  # Less aggressive augmentation
+    "GRADIENT_CLIP": 0.5,  # Stronger gradient clipping
+    "MIXUP_ALPHA": 0.5,  # Stronger mixup for generalization
     "SCHEDULER": "adaptive",  # Advanced adaptive scheduling
-    "FOCAL_LOSS_GAMMA": 2.0,  # Focal loss for class imbalance
-    "CLASS_BOOST_PERSON": 3.0,  # Stronger boost for person class
+    "FOCAL_LOSS_GAMMA": 3.0,  # Stronger focal loss for class imbalance
+    "CLASS_BOOST_PERSON": 4.0,  # Even stronger boost for person class
+    "CLASS_BOOST_CAR": 2.0,  # Strong boost for car class (currently failing)
     "BALANCED_SAMPLING": True,  # Enable balanced sampling
-    "EARLY_STOPPING_PATIENCE": 8,  # More patience for convergence
+    "EARLY_STOPPING_PATIENCE": 6,  # Reduced patience to prevent severe overfitting
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -1434,8 +1440,13 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             print(f"   Train-Val Gap: {train_val_gap:.1%}")
             print(f"   Patience: {patience_counter}/{patience}")
             
-            if train_val_gap > 0.3:  # 30% gap
+            if train_val_gap > 0.25:  # 25% gap warning (lowered from 30%)
                 print(f"⚠️  WARNING: Severe overfitting detected!")
+                # Force stronger regularization if gap exceeds 40%
+                if train_val_gap > 0.40:
+                    print(f"🚨 CRITICAL: Train-val gap exceeds 40% - forcing early stop")
+                    print(f"   Current gap: {train_val_gap:.1%} - model likely memorizing")
+                    break
             
             # Early stopping
             if patience_counter >= patience:

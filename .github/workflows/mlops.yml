@@ -111,18 +111,18 @@ jobs:
           ENABLE_MLFLOW: "true"
           DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-          # Enhanced accuracy training with advanced class balancing  
-          EPOCHS: "15"              # Extended for better convergence and stability
-          BATCH_SIZE: "8"          # CI memory constraints
-          IMAGE_SIZE: "224"        # Full resolution
+          # ANTI-OVERFITTING: Aggressive regularization for better generalization  
+          EPOCHS: "12"              # Moderate epochs to prevent overfitting
+          BATCH_SIZE: "6"           # Smaller batch for better generalization
+          IMAGE_SIZE: "224"         # Full resolution
           BACKBONE: "efficientnet_b0"  # Balanced complexity
-          LEARNING_RATE: "3e-5"    # Optimized for stable training
-          WEIGHT_DECAY: "0.02"     # Balanced regularization
-          LABEL_SMOOTHING: "0.15"  # Optimized for class balance
-          DROPOUT_RATE: "0.4"      # Optimized for better learning
-          NOISE_FACTOR: "0.15"     # Moderate augmentation
-          GRADIENT_CLIP: "1.0"     # Gradient clipping
-          MIXUP_ALPHA: "0.3"       # Moderate mixup for generalization
+          LEARNING_RATE: "1e-5"     # Much lower LR for stability
+          WEIGHT_DECAY: "0.08"      # Strong regularization
+          LABEL_SMOOTHING: "0.3"    # Strong label smoothing
+          DROPOUT_RATE: "0.6"       # Strong dropout for generalization
+          NOISE_FACTOR: "0.1"       # Reduced augmentation
+          GRADIENT_CLIP: "0.5"      # Strong gradient clipping
+          MIXUP_ALPHA: "0.5"        # Strong mixup for generalization
           SCHEDULER: "adaptive"     # Advanced adaptive scheduling
           FOCAL_LOSS_GAMMA: "2.0"  # Focal loss for class imbalance
           CLASS_BOOST_PERSON: "2.5"  # Strong boost for person class
