@@ -33,6 +33,8 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 import timm
 import torchmetrics
 from torchmetrics import Accuracy, Precision, Recall, F1Score
+from torchvision import transforms
+import torch.nn.utils as utils
 
 import mlflow
 import mlflow.pytorch
@@ -90,10 +92,12 @@ CONFIG = {
     "BACKBONE": "mobilenetv2_100",
     
     # Training
-    "EPOCHS": 2,
-    "BATCH_SIZE": 32,
-    "LEARNING_RATE": 1e-4,
-    "WEIGHT_DECAY": 1e-4,
+    "EPOCHS": 20,
+    "BATCH_SIZE": 16,
+    "LEARNING_RATE": 3e-4,
+    "WEIGHT_DECAY": 1e-3,
+    "WARMUP_EPOCHS": 3,
+    "LABEL_SMOOTHING": 0.1,
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -179,10 +183,27 @@ class RadarDataset(Dataset):
     Fails FAST if any file is missing or corrupted.
     """
 
-    def __init__(self, samples, class_to_idx, transform=None):
+    def __init__(self, samples, class_to_idx, transform=None, is_training=False):
         self.samples = samples
         self.class_to_idx = class_to_idx
         self.transform = transform
+        self.is_training = is_training
+        
+        # Enhanced augmentations for training
+        if is_training:
+            self.img_transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.RandomRotation(15),
+                transforms.RandomHorizontalFlip(0.5),
+                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
+                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                transforms.ToTensor()
+            ])
+        else:
+            self.img_transform = transforms.Compose([
+                transforms.ToPILImage(),
+                transforms.ToTensor()
+            ])
 
     def __len__(self):
         return len(self.samples)
@@ -207,7 +228,13 @@ class RadarDataset(Dataset):
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = cv2.resize(image, (CONFIG['IMAGE_SIZE'], CONFIG['IMAGE_SIZE']))
-        image = image.astype(np.float32) / 255.0
+        
+        # Apply augmentations if training
+        if self.is_training and self.img_transform:
+            image = self.img_transform(image.astype(np.uint8))
+            image = image.permute(1, 2, 0).numpy()
+        else:
+            image = image.astype(np.float32) / 255.0
 
         # ---------------- RADAR ----------------
 
@@ -501,9 +528,9 @@ def create_dataloaders(samples, class_to_idx):
     val_samples = [samples[i] for i in val_idx]
     test_samples = [samples[i] for i in test_idx]
     
-    train_dataset = RadarDataset(train_samples, class_to_idx)
-    val_dataset = RadarDataset(val_samples, class_to_idx)
-    test_dataset = RadarDataset(test_samples, class_to_idx)
+    train_dataset = RadarDataset(train_samples, class_to_idx, is_training=True)
+    val_dataset = RadarDataset(val_samples, class_to_idx, is_training=False)
+    test_dataset = RadarDataset(test_samples, class_to_idx, is_training=False)
     
     # PRODUCTION: Better DataLoader settings
     # Optimized for GPU training
@@ -607,15 +634,25 @@ class MultimodalModel(nn.Module):
         
         rad_feat = 128  # Fixed by architecture
         
-        # Feature projection
+        # Enhanced feature projection with batch norm
         self.img_proj = nn.Sequential(
             nn.Linear(img_feat, 512),
-            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.3)
         )
         self.rad_proj = nn.Sequential(
             nn.Linear(rad_feat, 512),
-            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4),
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.3)
         )
         
@@ -625,15 +662,21 @@ class MultimodalModel(nn.Module):
             dropout=0.4, bidirectional=True
         )
         
-        # Classifier
+        # Enhanced classifier with residual connection
         self.classifier = nn.Sequential(
             nn.Linear(1024, 512),
-            nn.ReLU(),
+            nn.BatchNorm1d(512),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.5),
             nn.Linear(512, 256),
-            nn.ReLU(),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
             nn.Dropout(0.4),
-            nn.Linear(256, num_classes)
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.3),
+            nn.Linear(128, num_classes)
         )
         
     def forward(self, image, radar):
@@ -737,11 +780,11 @@ class MetricsTracker:
 print("Metrics tracker ready")
 
 
-def train_epoch(model, loader, criterion, optimizer, device, metrics):
+def train_epoch(model, loader, criterion, optimizer, scheduler, device, metrics, epoch):
     model.train()
     total_loss = 0
     
-    for batch in tqdm(loader, desc="Training"):
+    for batch_idx, batch in enumerate(tqdm(loader, desc=f"Training Epoch {epoch}")):
         images = batch['image'].to(device, non_blocking=True)
         radars = batch['radar'].to(device, non_blocking=True)
         labels = batch['label'].to(device, non_blocking=True)
@@ -750,7 +793,12 @@ def train_epoch(model, loader, criterion, optimizer, device, metrics):
         outputs = model(images, radars)
         loss = criterion(outputs, labels)
         loss.backward()
+        
+        # Gradient clipping for stability
+        utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
+        scheduler.step()  # Step-wise scheduling
         
         probs = F.softmax(outputs, dim=1)
         preds = torch.argmax(outputs, dim=1)
@@ -761,13 +809,13 @@ def train_epoch(model, loader, criterion, optimizer, device, metrics):
     return total_loss/len(loader), metrics.compute()
 
 
-def validate_epoch(model, loader, criterion, device, metrics):
+def validate_epoch(model, loader, criterion, device, metrics, epoch):
     """Validate one epoch"""
     model.eval()
     total_loss = 0
     
     with torch.no_grad():
-        for batch in tqdm(loader, desc="Validating"):
+        for batch in tqdm(loader, desc=f"Validating Epoch {epoch}"):
             images = batch['image'].to(device, non_blocking=True)
             radars = batch['radar'].to(device, non_blocking=True)
             labels = batch['label'].to(device, non_blocking=True)
@@ -799,27 +847,37 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
     # Use class weights if provided (for imbalanced dataset)
     if class_weights is not None:
         class_weights_tensor = torch.FloatTensor(class_weights).to(device)
-        criterion = nn.CrossEntropyLoss(weight=class_weights_tensor)
+        criterion = nn.CrossEntropyLoss(weight=class_weights_tensor, label_smoothing=CONFIG.get('LABEL_SMOOTHING', 0.1))
     else:
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=CONFIG.get('LABEL_SMOOTHING', 0.1))
         
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=CONFIG['LEARNING_RATE'], 
-        weight_decay=CONFIG['WEIGHT_DECAY']
+        weight_decay=CONFIG['WEIGHT_DECAY'],
+        betas=(0.9, 0.999),
+        eps=1e-8
     )
     
-    scheduler = ReduceLROnPlateau(
-        optimizer,
-        mode="max",
-        factor=0.5,
-        patience=5
-    )
+    # Cosine annealing with warmup
+    warmup_epochs = CONFIG.get('WARMUP_EPOCHS', 3)
+    total_steps = len(train_loader) * CONFIG['EPOCHS']
+    warmup_steps = len(train_loader) * warmup_epochs
+    
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / warmup_steps
+        else:
+            progress = (step - warmup_steps) / (total_steps - warmup_steps)
+            return 0.5 * (1.0 + np.cos(np.pi * progress))
+    
+    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
     
     train_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
     val_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
     
     best_val_acc = 0
+    epochs_without_improvement = 0
     history = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
     
     run_name = f"run_3class_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -844,18 +902,17 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             # Train
             train_metrics.reset()
             train_loss, train_m = train_epoch(
-                model, train_loader, criterion, optimizer, device, train_metrics
+                model, train_loader, criterion, optimizer, scheduler, device, train_metrics, epoch+1
             )
             
             # Validate
             val_metrics.reset()
             val_loss, val_m = validate_epoch(
-                model, val_loader, criterion, device, val_metrics
+                model, val_loader, criterion, device, val_metrics, epoch+1
             )
             
-            # Scheduler step
-            scheduler.step(val_m['accuracy'])
-            lr = optimizer.param_groups[0]['lr']
+            # Get current learning rate
+            current_lr = scheduler.get_last_lr()[0]
             
             # History
             history['train_loss'].append(train_loss)
@@ -871,27 +928,41 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
                 'val_loss': val_loss,
                 'val_accuracy': val_m['accuracy'],
                 'val_f1': val_m['f1_macro'],
-                'learning_rate': lr
+                'learning_rate': current_lr
             }, step=epoch)
             
-            # Print summary
-            print(f"  Train Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f}")
-            print(f"  Val   Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f}")
+            # Print summary with better formatting
+            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f}")
+            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f} | LR: {current_lr:.2e}")
             
-            # Save best model
+            # Save best model with enhanced checkpoint
             if val_m['accuracy'] > best_val_acc:
                 best_val_acc = val_m['accuracy']
-                checkpoint_path = f"{CONFIG['OUTPUT_DIR']}/best_model_3class.pth"
+                checkpoint_path = f"{CONFIG['OUTPUT_DIR']}/best_model.pth"
                 torch.save({
-                    'epoch': epoch,
+                    'epoch': epoch + 1,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scheduler_state_dict': scheduler.state_dict(),
                     "val_accuracy": val_m['accuracy'],
-                    "config": CONFIG
+                    "val_f1": val_m['f1_macro'],
+                    "train_accuracy": train_m['accuracy'],
+                    "config": CONFIG,
+                    "class_mapping": CONFIG['CLASS_MAPPING']
                 }, checkpoint_path)
                 
                 log_model(model, "best_model")
-                print(f"  Saved best model: {best_val_acc:.4f}")
+                print(f"  ✅ New best model saved! Val Acc: {best_val_acc:.4f}")
+                
+                # Early stopping check
+                epochs_without_improvement = 0
+            else:
+                epochs_without_improvement += 1
+                
+            # Early stopping
+            if epochs_without_improvement >= 8:
+                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 8 epochs)")
+                break
         
         log_model(model, "final_model")
         
