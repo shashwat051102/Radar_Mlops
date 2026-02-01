@@ -16,7 +16,9 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import (
     classification_report, confusion_matrix,
     accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score
+    roc_auc_score, roc_curve, auc,
+    balanced_accuracy_score, cohen_kappa_score,
+    precision_recall_curve, average_precision_score
 )
 from sklearn.preprocessing import LabelEncoder
 
@@ -92,12 +94,12 @@ CONFIG = {
     "BACKBONE": "mobilenetv2_100",
     
     # Training
-    "EPOCHS": 20,
-    "BATCH_SIZE": 16,
-    "LEARNING_RATE": 3e-4,
-    "WEIGHT_DECAY": 1e-3,
-    "WARMUP_EPOCHS": 3,
-    "LABEL_SMOOTHING": 0.1,
+    "EPOCHS": 15,
+    "BATCH_SIZE": 32,
+    "LEARNING_RATE": 1e-4,
+    "WEIGHT_DECAY": 5e-4,
+    "WARMUP_EPOCHS": 2,
+    "LABEL_SMOOTHING": 0.15,
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -189,14 +191,13 @@ class RadarDataset(Dataset):
         self.transform = transform
         self.is_training = is_training
         
-        # Enhanced augmentations for training
+        # More conservative augmentations for training
         if is_training:
             self.img_transform = transforms.Compose([
                 transforms.ToPILImage(),
-                transforms.RandomRotation(15),
-                transforms.RandomHorizontalFlip(0.5),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1),
-                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                transforms.RandomRotation(10),
+                transforms.RandomHorizontalFlip(0.3),
+                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05),
                 transforms.ToTensor()
             ])
         else:
@@ -634,48 +635,42 @@ class MultimodalModel(nn.Module):
         
         rad_feat = 128  # Fixed by architecture
         
-        # Enhanced feature projection with batch norm
+        # Simpler feature projection to reduce overfitting
         self.img_proj = nn.Sequential(
-            nn.Linear(img_feat, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
-            nn.Linear(512, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.3)
-        )
-        self.rad_proj = nn.Sequential(
-            nn.Linear(rad_feat, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
-            nn.Linear(512, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.3)
-        )
-        
-        # LSTM feature
-        self.lstm = nn.LSTM(
-            1024, 512, num_layers=2, batch_first=True, 
-            dropout=0.4, bidirectional=True
-        )
-        
-        # Enhanced classifier with residual connection
-        self.classifier = nn.Sequential(
-            nn.Linear(1024, 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(img_feat, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Dropout(0.5),
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4)
+        )
+        self.rad_proj = nn.Sequential(
+            nn.Linear(rad_feat, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.5),
+            nn.Linear(256, 256),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.4)
+        )
+        
+        # Simpler LSTM feature
+        self.lstm = nn.LSTM(
+            512, 256, num_layers=1, batch_first=True, 
+            dropout=0.5, bidirectional=True
+        )
+        
+        # Simpler classifier with stronger regularization
+        self.classifier = nn.Sequential(
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
+            nn.Dropout(0.6),
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
+            nn.Dropout(0.5),
             nn.Linear(128, num_classes)
         )
         
@@ -692,46 +687,92 @@ class MultimodalModel(nn.Module):
 
 
 class MetricsTracker:
-    """Track all classification metrics"""
+    """Track comprehensive classification metrics"""
     
     def __init__(self, num_classes, device):
         self.num_classes = num_classes
         self.device = device
         
-        # Initialize metrics
+        # Initialize torchmetrics
         self.accuracy = Accuracy(task='multiclass', num_classes=num_classes).to(device)
-        self.precision = Precision(task='multiclass', num_classes=num_classes, average='macro').to(device)
-        self.recall = Recall(task='multiclass', num_classes=num_classes, average='macro').to(device)
-        self.f1 = F1Score(task='multiclass', num_classes=num_classes, average='macro').to(device)
+        self.balanced_accuracy = Accuracy(task='multiclass', num_classes=num_classes, average='macro').to(device)
         
+        # Macro averages
+        self.precision_macro = Precision(task='multiclass', num_classes=num_classes, average='macro').to(device)
+        self.recall_macro = Recall(task='multiclass', num_classes=num_classes, average='macro').to(device)
+        self.f1_macro = F1Score(task='multiclass', num_classes=num_classes, average='macro').to(device)
+        
+        # Micro averages
+        self.precision_micro = Precision(task='multiclass', num_classes=num_classes, average='micro').to(device)
+        self.recall_micro = Recall(task='multiclass', num_classes=num_classes, average='micro').to(device)
+        self.f1_micro = F1Score(task='multiclass', num_classes=num_classes, average='micro').to(device)
+        
+        # Weighted averages
+        self.precision_weighted = Precision(task='multiclass', num_classes=num_classes, average='weighted').to(device)
+        self.recall_weighted = Recall(task='multiclass', num_classes=num_classes, average='weighted').to(device)
+        self.f1_weighted = F1Score(task='multiclass', num_classes=num_classes, average='weighted').to(device)
+        
+        # Per-class metrics
         self.precision_per_class = Precision(task='multiclass', num_classes=num_classes, average=None).to(device)
         self.recall_per_class = Recall(task='multiclass', num_classes=num_classes, average=None).to(device)
         self.f1_per_class = F1Score(task='multiclass', num_classes=num_classes, average=None).to(device)
         
+        # Store raw predictions for advanced metrics
         self.all_preds = []
         self.all_labels = []
         self.all_probs = []
         
     def update(self, preds, labels, probs=None):
+        # Update all torchmetrics
         self.accuracy.update(preds, labels)
-        self.precision.update(preds, labels)
-        self.recall.update(preds, labels)
-        self.f1.update(preds, labels)
+        self.balanced_accuracy.update(preds, labels)
+        
+        # Macro metrics
+        self.precision_macro.update(preds, labels)
+        self.recall_macro.update(preds, labels)
+        self.f1_macro.update(preds, labels)
+        
+        # Micro metrics
+        self.precision_micro.update(preds, labels)
+        self.recall_micro.update(preds, labels)
+        self.f1_micro.update(preds, labels)
+        
+        # Weighted metrics
+        self.precision_weighted.update(preds, labels)
+        self.recall_weighted.update(preds, labels)
+        self.f1_weighted.update(preds, labels)
+        
+        # Per-class metrics
         self.precision_per_class.update(preds, labels)
         self.recall_per_class.update(preds, labels)
         self.f1_per_class.update(preds, labels)
         
+        # Store for sklearn metrics
         self.all_preds.append(preds.cpu())
         self.all_labels.append(labels.cpu())
         if probs is not None:
             self.all_probs.append(probs.cpu())
             
     def compute(self):
+        # Basic metrics
         metrics = {
             'accuracy': self.accuracy.compute().item(),
-            'precision_macro': self.precision.compute().item(),
-            'recall_macro': self.recall.compute().item(),
-            'f1_macro': self.f1.compute().item(),
+            'balanced_accuracy': self.balanced_accuracy.compute().item(),
+            
+            # Macro averages
+            'precision_macro': self.precision_macro.compute().item(),
+            'recall_macro': self.recall_macro.compute().item(),
+            'f1_macro': self.f1_macro.compute().item(),
+            
+            # Micro averages
+            'precision_micro': self.precision_micro.compute().item(),
+            'recall_micro': self.recall_micro.compute().item(),
+            'f1_micro': self.f1_micro.compute().item(),
+            
+            # Weighted averages
+            'precision_weighted': self.precision_weighted.compute().item(),
+            'recall_weighted': self.recall_weighted.compute().item(),
+            'f1_weighted': self.f1_weighted.compute().item(),
         }
         
         # Per-class metrics
@@ -744,34 +785,81 @@ class MetricsTracker:
             metrics[f'precision_{name}'] = prec_pc[i].item()
             metrics[f'recall_{name}'] = rec_pc[i].item()
             metrics[f'f1_{name}'] = f1_pc[i].item()
-            
-        # Additional metrics
+        
+        # Advanced sklearn-based metrics
         if self.all_preds:
             all_preds = torch.cat(self.all_preds).numpy()
             all_labels = torch.cat(self.all_labels).numpy()
             
-            metrics['precision_weighted'] = precision_score(all_labels, all_preds, average='weighted', zero_division=0)
-            metrics['recall_weighted'] = recall_score(all_labels, all_preds, average='weighted', zero_division=0)
-            metrics['f1_weighted'] = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+            # Confusion matrix based metrics
+            cm = confusion_matrix(all_labels, all_preds)
+            metrics['confusion_matrix'] = cm.tolist()
             
-            # ROC-AUC
+            # Cohen's Kappa
+            metrics['cohen_kappa'] = cohen_kappa_score(all_labels, all_preds)
+            
+            # Class support (number of samples per class)
+            class_support = np.bincount(all_labels)
+            for i, name in enumerate(class_names):
+                metrics[f'support_{name}'] = int(class_support[i])
+            
+            # ROC-AUC metrics
             if self.all_probs:
                 try:
                     all_probs = torch.cat(self.all_probs).numpy()
+                    
+                    # Multi-class ROC-AUC
                     metrics['roc_auc_ovr'] = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='macro')
-                except:
-                    pass
+                    metrics['roc_auc_ovo'] = roc_auc_score(all_labels, all_probs, multi_class='ovo', average='macro')
+                    
+                    # Per-class ROC-AUC
+                    from sklearn.preprocessing import label_binarize
+                    y_bin = label_binarize(all_labels, classes=list(range(self.num_classes)))
+                    for i, name in enumerate(class_names):
+                        if len(np.unique(all_labels)) > 1:  # Check if class exists
+                            try:
+                                metrics[f'roc_auc_{name}'] = roc_auc_score(y_bin[:, i], all_probs[:, i])
+                            except:
+                                metrics[f'roc_auc_{name}'] = 0.0
+                        
+                    # Average Precision (AP) scores
+                    for i, name in enumerate(class_names):
+                        try:
+                            metrics[f'avg_precision_{name}'] = average_precision_score(y_bin[:, i], all_probs[:, i])
+                        except:
+                            metrics[f'avg_precision_{name}'] = 0.0
+                            
+                    # Mean Average Precision (mAP)
+                    ap_scores = [metrics.get(f'avg_precision_{name}', 0.0) for name in class_names]
+                    metrics['mean_avg_precision'] = np.mean(ap_scores)
+                    
+                except Exception as e:
+                    print(f"Warning: Could not compute ROC-AUC metrics: {e}")
         
         return metrics
     
     def reset(self):
+        # Reset all torchmetrics
         self.accuracy.reset()
-        self.precision.reset()
-        self.recall.reset()
-        self.f1.reset()
+        self.balanced_accuracy.reset()
+        
+        self.precision_macro.reset()
+        self.recall_macro.reset()
+        self.f1_macro.reset()
+        
+        self.precision_micro.reset()
+        self.recall_micro.reset()
+        self.f1_micro.reset()
+        
+        self.precision_weighted.reset()
+        self.recall_weighted.reset()
+        self.f1_weighted.reset()
+        
         self.precision_per_class.reset()
         self.recall_per_class.reset()
         self.f1_per_class.reset()
+        
+        # Clear stored values
         self.all_preds = []
         self.all_labels = []
         self.all_probs = []
@@ -920,20 +1008,61 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             history['train_acc'].append(train_m['accuracy'])
             history['val_acc'].append(val_m['accuracy'])
             
-            # PRODUCTION: Protected MLflow logging
-            log_metrics({
+            # Enhanced MLflow logging with comprehensive metrics
+            epoch_metrics = {
+                # Training metrics
                 'train_loss': train_loss,
                 'train_accuracy': train_m['accuracy'],
-                'train_f1': train_m['f1_macro'],
+                'train_f1_macro': train_m['f1_macro'],
+                'train_f1_micro': train_m['f1_micro'],
+                'train_f1_weighted': train_m['f1_weighted'],
+                'train_precision_macro': train_m['precision_macro'],
+                'train_recall_macro': train_m['recall_macro'],
+                'train_balanced_accuracy': train_m['balanced_accuracy'],
+                
+                # Validation metrics
                 'val_loss': val_loss,
                 'val_accuracy': val_m['accuracy'],
-                'val_f1': val_m['f1_macro'],
+                'val_f1_macro': val_m['f1_macro'],
+                'val_f1_micro': val_m['f1_micro'],
+                'val_f1_weighted': val_m['f1_weighted'],
+                'val_precision_macro': val_m['precision_macro'],
+                'val_recall_macro': val_m['recall_macro'],
+                'val_balanced_accuracy': val_m['balanced_accuracy'],
+                'val_cohen_kappa': val_m.get('cohen_kappa', 0),
+                
+                # Learning rate
                 'learning_rate': current_lr
-            }, step=epoch)
+            }
             
-            # Print summary with better formatting
-            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f}")
-            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f} | LR: {current_lr:.2e}")
+            # Add per-class metrics
+            class_names = list(CONFIG['CLASS_MAPPING'].values())
+            for name in class_names:
+                epoch_metrics[f'train_f1_{name}'] = train_m.get(f'f1_{name}', 0)
+                epoch_metrics[f'val_f1_{name}'] = val_m.get(f'f1_{name}', 0)
+                epoch_metrics[f'val_precision_{name}'] = val_m.get(f'precision_{name}', 0)
+                epoch_metrics[f'val_recall_{name}'] = val_m.get(f'recall_{name}', 0)
+            
+            # Add ROC-AUC if available
+            if 'roc_auc_ovr' in val_m:
+                epoch_metrics['val_roc_auc_ovr'] = val_m['roc_auc_ovr']
+                epoch_metrics['val_roc_auc_ovo'] = val_m.get('roc_auc_ovo', 0)
+                epoch_metrics['val_mean_avg_precision'] = val_m.get('mean_avg_precision', 0)
+            
+            log_metrics(epoch_metrics, step=epoch)
+            
+            # Enhanced console output with comprehensive metrics
+            print(f"  Train → Loss: {train_loss:.4f} | Acc: {train_m['accuracy']:.4f} | F1: {train_m['f1_macro']:.4f} | Bal-Acc: {train_m['balanced_accuracy']:.4f}")
+            print(f"  Val   → Loss: {val_loss:.4f} | Acc: {val_m['accuracy']:.4f} | F1: {val_m['f1_macro']:.4f} | Bal-Acc: {val_m['balanced_accuracy']:.4f}")
+            
+            # Per-class F1 scores
+            class_names = list(CONFIG['CLASS_MAPPING'].values())
+            val_f1_per_class = [f"{name}: {val_m.get(f'f1_{name}', 0):.3f}" for name in class_names]
+            print(f"  Val F1 per class: {' | '.join(val_f1_per_class)}")
+            
+            # Advanced metrics if available
+            if 'cohen_kappa' in val_m:
+                print(f"  Kappa: {val_m['cohen_kappa']:.4f} | ROC-AUC: {val_m.get('roc_auc_ovr', 0):.4f} | mAP: {val_m.get('mean_avg_precision', 0):.4f} | LR: {current_lr:.2e}")
             
             # Save best model with enhanced checkpoint
             if val_m['accuracy'] > best_val_acc:
@@ -954,14 +1083,14 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
                 log_model(model, "best_model")
                 print(f"  ✅ New best model saved! Val Acc: {best_val_acc:.4f}")
                 
-                # Early stopping check
+                # Early stopping check (more conservative)
                 epochs_without_improvement = 0
             else:
                 epochs_without_improvement += 1
                 
-            # Early stopping
-            if epochs_without_improvement >= 8:
-                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 8 epochs)")
+            # Early stopping after fewer epochs
+            if epochs_without_improvement >= 5:
+                print(f"\n⚠️  Early stopping after {epoch+1} epochs (no improvement for 5 epochs)")
                 break
         
         log_model(model, "final_model")
@@ -982,7 +1111,7 @@ def evaluate_test(test_loader):
     
     # Load best model
     model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
-    checkpoint_path = f"{CONFIG['OUTPUT_DIR']}/best_model_3class.pth"
+    checkpoint_path = f"{CONFIG['OUTPUT_DIR']}/best_model.pth"
     
     if not os.path.exists(checkpoint_path):
         raise RuntimeError(f"Model not found: {checkpoint_path}")
@@ -1015,14 +1144,66 @@ def evaluate_test(test_loader):
     all_preds_concat = torch.cat(all_preds).numpy()
     all_labels_concat = torch.cat(all_labels).numpy()
     
-    # Print results
-    print("\n" + "-" * 50)
-    print("TEST RESULTS:")
-    print("-" * 50)
-    print(f"Accuracy:         {metrics['accuracy']:.4f}")
-    print(f"Precision (macro):{metrics['precision_macro']:.4f}")
-    print(f"Recall (macro):   {metrics['recall_macro']:.4f}")
-    print(f"F1-Score (macro): {metrics['f1_macro']:.4f}")
+    # Print comprehensive results
+    print("\n" + "=" * 80)
+    print("📊 COMPREHENSIVE TEST RESULTS")
+    print("=" * 80)
+    
+    # Overall metrics
+    print(f"Overall Accuracy:        {metrics['accuracy']:.4f}")
+    print(f"Balanced Accuracy:       {metrics['balanced_accuracy']:.4f}")
+    print(f"Cohen's Kappa:           {metrics.get('cohen_kappa', 0):.4f}")
+    
+    print("\n📈 MACRO AVERAGES:")
+    print(f"Precision (macro):       {metrics['precision_macro']:.4f}")
+    print(f"Recall (macro):          {metrics['recall_macro']:.4f}")
+    print(f"F1-Score (macro):        {metrics['f1_macro']:.4f}")
+    
+    print("\n📊 WEIGHTED AVERAGES:")
+    print(f"Precision (weighted):    {metrics['precision_weighted']:.4f}")
+    print(f"Recall (weighted):       {metrics['recall_weighted']:.4f}")
+    print(f"F1-Score (weighted):     {metrics['f1_weighted']:.4f}")
+    
+    # Per-class detailed metrics
+    print("\n" + "-" * 60)
+    print("📋 PER-CLASS DETAILED METRICS")
+    print("-" * 60)
+    class_names = list(CONFIG['CLASS_MAPPING'].values())
+    print(f"{'Class':<12} {'Precision':<10} {'Recall':<10} {'F1-Score':<10} {'Support':<8}")
+    print("-" * 60)
+    for name in class_names:
+        prec = metrics.get(f'precision_{name}', 0)
+        rec = metrics.get(f'recall_{name}', 0)
+        f1 = metrics.get(f'f1_{name}', 0)
+        support = metrics.get(f'support_{name}', 0)
+        print(f"{name:<12} {prec:<10.4f} {rec:<10.4f} {f1:<10.4f} {support:<8}")
+    
+    # ROC-AUC metrics if available
+    if 'roc_auc_ovr' in metrics:
+        print("\n" + "-" * 50)
+        print("🎯 ROC-AUC METRICS")
+        print("-" * 50)
+        print(f"ROC-AUC (One-vs-Rest):   {metrics['roc_auc_ovr']:.4f}")
+        print(f"ROC-AUC (One-vs-One):    {metrics.get('roc_auc_ovo', 0):.4f}")
+        print(f"Mean Avg Precision:      {metrics.get('mean_avg_precision', 0):.4f}")
+        
+        print("\nPer-class ROC-AUC:")
+        for name in class_names:
+            auc_score = metrics.get(f'roc_auc_{name}', 0)
+            ap_score = metrics.get(f'avg_precision_{name}', 0)
+            print(f"  {name:<12} AUC: {auc_score:.4f} | AP: {ap_score:.4f}")
+    
+    # Confusion Matrix
+    if 'confusion_matrix' in metrics:
+        print("\n" + "-" * 40)
+        print("🔥 CONFUSION MATRIX")
+        print("-" * 40)
+        cm = np.array(metrics['confusion_matrix'])
+        print(f"{'Predicted →':<12} {' '.join([f'{name:<8}' for name in class_names])}")
+        print(f"{'Actual ↓':<12}")
+        for i, name in enumerate(class_names):
+            row = ' '.join([f'{cm[i,j]:<8}' for j in range(len(class_names))])
+            print(f"{name:<12} {row}")
     
     # Classification report
     print("\n" + "-" * 50)
@@ -1034,11 +1215,46 @@ def evaluate_test(test_loader):
         zero_division=0
     ))
     
-    # PRODUCTION: Protected MLflow logging
+    # Enhanced MLflow logging for test results
     if MLFLOW_ACTIVE:
         try:
-            with mlflow.start_run(run_name="test_evaluation_3class"):
-                log_metrics({f'test_{k}': v for k, v in metrics.items() if isinstance(v, (int, float))})
+            with mlflow.start_run(run_name="comprehensive_test_evaluation"):
+                # Log all test metrics
+                test_log_metrics = {f'test_{k}': v for k, v in metrics.items() 
+                                   if isinstance(v, (int, float)) and not k.startswith('confusion_matrix')}
+                log_metrics(test_log_metrics)
+                
+                # Log confusion matrix as artifact if available
+                if 'confusion_matrix' in metrics:
+                    import matplotlib.pyplot as plt
+                    plt.figure(figsize=(8, 6))
+                    cm = np.array(metrics['confusion_matrix'])
+                    plt.imshow(cm, interpolation='nearest', cmap=plt.cm.Blues)
+                    plt.title('Confusion Matrix')
+                    plt.colorbar()
+                    
+                    class_names = list(CONFIG['CLASS_MAPPING'].values())
+                    tick_marks = np.arange(len(class_names))
+                    plt.xticks(tick_marks, class_names, rotation=45)
+                    plt.yticks(tick_marks, class_names)
+                    
+                    # Add text annotations
+                    thresh = cm.max() / 2.
+                    for i in range(cm.shape[0]):
+                        for j in range(cm.shape[1]):
+                            plt.text(j, i, format(cm[i, j], 'd'),
+                                    horizontalalignment="center",
+                                    color="white" if cm[i, j] > thresh else "black")
+                    
+                    plt.ylabel('True label')
+                    plt.xlabel('Predicted label')
+                    plt.tight_layout()
+                    
+                    # Save and log as artifact
+                    plt.savefig(f"{CONFIG['OUTPUT_DIR']}/confusion_matrix.png")
+                    mlflow.log_artifact(f"{CONFIG['OUTPUT_DIR']}/confusion_matrix.png")
+                    plt.close()
+                    
         except Exception as e:
             print(f"MLflow test logging failed (non-critical): {e}")
     
@@ -1051,7 +1267,7 @@ def predict_single(image_path, radar_path, model_path=None):
     model = MultimodalModel(CONFIG['NUM_CLASSES']).to(device)
     
     if model_path is None:
-        model_path = f"{CONFIG['OUTPUT_DIR']}/best_model_3class.pth"
+        model_path = f"{CONFIG['OUTPUT_DIR']}/best_model.pth"
     
     if os.path.exists(model_path):
         checkpoint = torch.load(model_path, map_location=device)
