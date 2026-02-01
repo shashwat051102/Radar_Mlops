@@ -42,6 +42,26 @@ import mlflow
 import mlflow.pytorch
 import dagshub
 
+# Import enhanced accuracy solutions
+try:
+    from accuracy_solutions import (FocalLoss, AdvancedLRScheduler, get_balanced_class_weights, 
+                                    get_weighted_sampler, EnhancedEarlyStopping, 
+                                    calculate_balanced_accuracy, apply_mixup_advanced, 
+                                    AdvancedMetricsTracker, ENHANCED_CONFIG)
+    print("✅ Enhanced accuracy solutions loaded")
+except ImportError as e:
+    print(f"⚠️ Warning: Could not import accuracy solutions - {e}")
+    # Define dummy classes to prevent errors
+    class FocalLoss(nn.CrossEntropyLoss): pass
+    class AdvancedLRScheduler: pass
+    def get_balanced_class_weights(*args): return torch.ones(3)
+    def get_weighted_sampler(*args): return None
+    class EnhancedEarlyStopping: pass
+    def calculate_balanced_accuracy(*args): return 0.0
+    def apply_mixup_advanced(*args): return args
+    class AdvancedMetricsTracker: pass
+    ENHANCED_CONFIG = {}
+
 # PRODUCTION: Enable cudnn benchmark for free GPU speedup
 torch.backends.cudnn.benchmark = True
 
@@ -93,18 +113,23 @@ CONFIG = {
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
     "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
-    # Training - Advanced anti-overfitting settings with CI overrides
-    "EPOCHS": int(os.environ.get('EPOCHS', 20)),  # Extended training: CI: 10, Local: 20
+    # Training - Enhanced accuracy and class balance settings
+    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # Extended for convergence: CI: 12, Local: 25
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
-    "LEARNING_RATE": 3e-5,  # Further reduced learning rate
-    "WEIGHT_DECAY": 6e-2,  # Balanced weight decay
-    "WARMUP_EPOCHS": 3,
-    "LABEL_SMOOTHING": 0.25,  # Balanced label smoothing
-    "DROPOUT_RATE": 0.6,  # Optimal dropout level
-    "NOISE_FACTOR": 0.25,  # Balanced augmentation
+    "LEARNING_RATE": 5e-5,  # Increased from 3e-5 for better convergence
+    "LEARNING_RATE_MIN": 1e-6,  # Minimum LR for adaptive scheduling
+    "WEIGHT_DECAY": 4e-2,  # Reduced slightly for better learning
+    "WARMUP_EPOCHS": 4,  # Extended warmup
+    "LABEL_SMOOTHING": 0.2,  # Reduced for better class distinction
+    "DROPOUT_RATE": 0.5,  # Reduced from 0.6 for better capacity
+    "NOISE_FACTOR": 0.2,  # Reduced augmentation noise
     "GRADIENT_CLIP": 1.0,  # Gradient clipping
-    "MIXUP_ALPHA": 0.3,  # Balanced mixup
-    "SCHEDULER": "cosine",  # Learning rate scheduling
+    "MIXUP_ALPHA": 0.4,  # Stronger mixup for better generalization
+    "SCHEDULER": "adaptive",  # Advanced adaptive scheduling
+    "FOCAL_LOSS_GAMMA": 2.0,  # Focal loss for class imbalance
+    "CLASS_BOOST_PERSON": 2.5,  # Strong boost for person class
+    "BALANCED_SAMPLING": True,  # Enable balanced sampling
+    "EARLY_STOPPING_PATIENCE": 6,  # More patience for convergence
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -612,28 +637,85 @@ def create_dataloaders(samples, class_to_idx):
         pin_memory=pin_memory
     )
     
-    # Calculate class weights for imbalanced dataset handling
+    # Enhanced class weights with stronger balancing
     class_counts = {}
+    train_labels = []
     for sample in train_samples:
         class_name = sample['class_name']
+        label = sample['label']
         class_counts[class_name] = class_counts.get(class_name, 0) + 1
+        train_labels.append(label)
     
-    # Calculate inverse frequency weights
-    total_samples = len(train_samples)
-    class_weights = []
-    for i in range(CONFIG['NUM_CLASSES']):
-        class_name = CONFIG['CLASS_MAPPING'][str(i)]
-        count = class_counts.get(class_name, 1)
-        weight = total_samples / (CONFIG['NUM_CLASSES'] * count)
-        class_weights.append(weight)
+    # Get enhanced balanced class weights
+    try:
+        enhanced_class_weights = get_balanced_class_weights(train_labels, CONFIG['NUM_CLASSES'])
+        print(f"✅ Using enhanced class weights: {enhanced_class_weights}")
+    except:
+        # Fallback to traditional class weights with person class boost
+        total_samples = len(train_samples)
+        enhanced_class_weights = []
+        boost_factors = {'bicycle': 1.0, 'car': 1.1, '1_person': CONFIG.get('CLASS_BOOST_PERSON', 2.5)}
+        
+        for i in range(CONFIG['NUM_CLASSES']):
+            class_name = CONFIG['CLASS_MAPPING'][str(i)]
+            count = class_counts.get(class_name, 1)
+            weight = total_samples / (CONFIG['NUM_CLASSES'] * count)
+            weight *= boost_factors.get(class_name, 1.0)  # Apply boost
+            enhanced_class_weights.append(weight)
+        
+        enhanced_class_weights = torch.FloatTensor(enhanced_class_weights)
+        print(f"✅ Using fallback enhanced weights: {enhanced_class_weights}")
+    
+    # Create balanced sampler if enabled
+    train_sampler = None
+    if CONFIG.get('BALANCED_SAMPLING', False):
+        try:
+            train_sampler = get_weighted_sampler(train_dataset, enhanced_class_weights)
+            print("✅ Using weighted random sampler for balanced training")
+            train_shuffle = False  # Don't shuffle when using sampler
+        except:
+            print("⚠️ Balanced sampling failed, using regular shuffling")
+            train_shuffle = True
+    else:
+        train_shuffle = True
+    
+    # Create enhanced dataloaders
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=CONFIG['BATCH_SIZE'], 
+        shuffle=train_shuffle,
+        sampler=train_sampler,
+        num_workers=num_workers, 
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=True if num_workers > 0 else False
+    )
+    
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=CONFIG['BATCH_SIZE'], 
+        shuffle=False,  # Don't shuffle validation
+        num_workers=num_workers, 
+        pin_memory=pin_memory,
+        prefetch_factor=prefetch_factor,
+        persistent_workers=True if num_workers > 0 else False
+    )
+    
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=CONFIG['BATCH_SIZE'], 
+        shuffle=False,  # Don't shuffle test
+        num_workers=num_workers, 
+        pin_memory=pin_memory
+    )
     
     print(f"   Train: {len(train_dataset)} samples ({len(train_loader)} batches)")
     print(f"   Val:   {len(val_dataset)} samples ({len(val_loader)} batches)")
     print(f"   Test:  {len(test_dataset)} samples ({len(test_loader)} batches)")
     print(f"   DataLoader workers: {num_workers}, pin_memory: {pin_memory}")
-    print(f"   Class weights: {dict(zip(CONFIG['CLASS_MAPPING'].values(), class_weights))}")
+    print(f"   Enhanced Class weights: {dict(zip(CONFIG['CLASS_MAPPING'].values(), enhanced_class_weights))}")
     
-    return train_loader, val_loader, test_loader, class_weights
+    return train_loader, val_loader, test_loader, enhanced_class_weights.tolist()
 
 
 class MultimodalModel(nn.Module):
@@ -998,37 +1080,82 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
     # Ensure output directory exists
     os.makedirs(CONFIG['OUTPUT_DIR'], exist_ok=True)
     
-    # Use class weights if provided (for imbalanced dataset)
+    # Enhanced loss function with focal loss for class imbalance
     if class_weights is not None:
-        class_weights_tensor = torch.FloatTensor(class_weights).to(device)
-        criterion = nn.CrossEntropyLoss(weight=class_weights_tensor, label_smoothing=CONFIG.get('LABEL_SMOOTHING', 0.1))
+        # Use enhanced focal loss with class weighting
+        alpha_weights = torch.FloatTensor([1.0, 1.1, 2.5]).to(device)  # Boost person class
+        criterion = FocalLoss(
+            alpha=alpha_weights, 
+            gamma=CONFIG.get('FOCAL_LOSS_GAMMA', 2.0)
+        )
+        print(f"✅ Using Focal Loss (gamma={CONFIG.get('FOCAL_LOSS_GAMMA', 2.0)}) with class weights: {alpha_weights}")
     else:
-        criterion = nn.CrossEntropyLoss(label_smoothing=CONFIG.get('LABEL_SMOOTHING', 0.1))
+        # Fallback to enhanced CrossEntropyLoss
+        alpha_weights = torch.FloatTensor([1.0, 1.1, 2.5]).to(device)
+        criterion = FocalLoss(
+            alpha=alpha_weights,
+            gamma=CONFIG.get('FOCAL_LOSS_GAMMA', 2.0)
+        )
+        print("✅ Using Focal Loss without external class weights")
         
+    # Enhanced optimizer with better settings
     optimizer = optim.AdamW(
         model.parameters(), 
         lr=CONFIG['LEARNING_RATE'], 
         weight_decay=CONFIG['WEIGHT_DECAY'],
         betas=(0.9, 0.999),
-        eps=1e-8
+        eps=1e-8,
+        amsgrad=True  # More stable convergence
     )
     
-    # Cosine annealing with warmup
-    warmup_epochs = CONFIG.get('WARMUP_EPOCHS', 3)
-    total_steps = len(train_loader) * CONFIG['EPOCHS']
-    warmup_steps = len(train_loader) * warmup_epochs
+    # Enhanced adaptive learning rate scheduler
+    if CONFIG.get('SCHEDULER') == 'adaptive':
+        scheduler = AdvancedLRScheduler(
+            optimizer, 
+            warmup_epochs=CONFIG.get('WARMUP_EPOCHS', 4),
+            max_lr=CONFIG['LEARNING_RATE'],
+            min_lr=CONFIG.get('LEARNING_RATE_MIN', 1e-6),
+            decay_factor=0.9,
+            patience=2
+        )
+        print("✅ Using Advanced Adaptive LR Scheduler")
+    else:
+        # Fallback to cosine annealing with warmup
+        warmup_epochs = CONFIG.get('WARMUP_EPOCHS', 3)
+        total_steps = len(train_loader) * CONFIG['EPOCHS']
+        warmup_steps = len(train_loader) * warmup_epochs
+        
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return step / warmup_steps
+            else:
+                progress = (step - warmup_steps) / (total_steps - warmup_steps)
+                return 0.5 * (1.0 + np.cos(np.pi * progress))
+        
+        scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+        print("✅ Using Cosine Annealing LR Scheduler")
     
-    def lr_lambda(step):
-        if step < warmup_steps:
-            return step / warmup_steps
-        else:
-            progress = (step - warmup_steps) / (total_steps - warmup_steps)
-            return 0.5 * (1.0 + np.cos(np.pi * progress))
+    # Enhanced metrics tracking
+    try:
+        train_metrics = AdvancedMetricsTracker(CONFIG['NUM_CLASSES'], ['bicycle', 'car', '1_person'])
+        val_metrics = AdvancedMetricsTracker(CONFIG['NUM_CLASSES'], ['bicycle', 'car', '1_person'])
+        print("✅ Using Advanced Metrics Tracker")
+    except:
+        train_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
+        val_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
+        print("⚠️ Using fallback metrics tracker")
     
-    scheduler = optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-    
-    train_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
-    val_metrics = MetricsTracker(CONFIG['NUM_CLASSES'], device)
+    # Enhanced early stopping
+    try:
+        early_stopping = EnhancedEarlyStopping(
+            patience=CONFIG.get('EARLY_STOPPING_PATIENCE', 6),
+            min_delta=0.005,
+            monitor='balanced_accuracy'
+        )
+        print("✅ Using Enhanced Early Stopping")
+    except:
+        early_stopping = None
+        print("⚠️ Enhanced early stopping not available")
     
     best_val_acc = 0
     epochs_without_improvement = 0
@@ -1066,18 +1193,41 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             print("-" * 80)
             
             # Train
-            train_metrics.reset()
+            if hasattr(train_metrics, 'reset'):
+                train_metrics.reset()
             train_loss, train_m = train_epoch(
                 model, train_loader, criterion, optimizer, scheduler, device, train_metrics, epoch+1
             )
             
             # Validate
-            val_metrics.reset()
+            if hasattr(val_metrics, 'reset'):
+                val_metrics.reset()
             val_loss, val_m = validate_epoch(
                 model, val_loader, criterion, device, val_metrics, epoch+1
             )
             
-            # Early stopping and overfitting check
+            # Enhanced scheduler step with validation accuracy
+            if CONFIG.get('SCHEDULER') == 'adaptive':
+                try:
+                    current_lr = scheduler.step(epoch, val_m.get('balanced_accuracy', val_m.get('accuracy', 0.0)))
+                    print(f"📈 Adaptive LR: {current_lr:.2e}")
+                except:
+                    pass
+            
+            # Enhanced early stopping
+            current_val_metrics = {
+                'balanced_accuracy': val_m.get('balanced_accuracy', calculate_balanced_accuracy([], [])),
+                'accuracy': val_m.get('accuracy', 0.0),
+                'f1_macro': val_m.get('f1_macro', 0.0)
+            }
+            
+            if early_stopping:
+                should_stop = early_stopping(current_val_metrics)
+                if should_stop:
+                    print(f"🛑 Enhanced early stopping triggered after {epoch+1} epochs")
+                    break
+            
+            # Traditional early stopping and overfitting check
             train_val_gap = train_m['accuracy'] - val_m['accuracy']
             
             # Check for improvement

@@ -111,38 +111,42 @@ jobs:
           ENABLE_MLFLOW: "true"
           DAGSHUB_USERNAME: ${{ secrets.DAGSHUB_USERNAME }}
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
-          # Advanced training with comprehensive anti-overfitting solutions
-          EPOCHS: "10"              # Extended training for better convergence
-          BATCH_SIZE: "8"          # Smaller for CI memory constraints
-          IMAGE_SIZE: "224"        # Full resolution for quality
-          BACKBONE: "efficientnet_b0"  # Balanced model complexity
-          LEARNING_RATE: "3e-5"    # Reduced learning rate
-          WEIGHT_DECAY: "0.08"     # Stronger regularization
-          LABEL_SMOOTHING: "0.3"   # Enhanced label smoothing
-          DROPOUT_RATE: "0.8"      # Maximum dropout
-          NOISE_FACTOR: "0.3"      # Enhanced augmentation
+          # Enhanced accuracy training with advanced class balancing  
+          EPOCHS: "12"              # Extended for better convergence
+          BATCH_SIZE: "8"          # CI memory constraints
+          IMAGE_SIZE: "224"        # Full resolution
+          BACKBONE: "efficientnet_b0"  # Balanced complexity
+          LEARNING_RATE: "5e-5"    # Increased for better convergence
+          WEIGHT_DECAY: "0.04"     # Reduced for better learning
+          LABEL_SMOOTHING: "0.2"   # Reduced for class distinction
+          DROPOUT_RATE: "0.5"      # Reduced from 0.6 for capacity
+          NOISE_FACTOR: "0.2"      # Reduced augmentation
           GRADIENT_CLIP: "1.0"     # Gradient clipping
-          MIXUP_ALPHA: "0.4"       # Mixup augmentation
-          SCHEDULER: "cosine"       # Learning rate scheduling
+          MIXUP_ALPHA: "0.4"       # Stronger mixup
+          SCHEDULER: "adaptive"     # Advanced adaptive scheduling
+          FOCAL_LOSS_GAMMA: "2.0"  # Focal loss for class imbalance
+          CLASS_BOOST_PERSON: "2.5"  # Strong boost for person class
+          BALANCED_SAMPLING: "true"   # Enable balanced sampling
         run: |
           if [ "$DEMO_MODE" = "true" ]; then
             echo "⚠️  DVC data pull failed - DagHub server errors (500)"
             echo "🔄 Retries attempted but DagHub cloud storage unavailable"
-            echo "📋 Would normally run enhanced training with:"
-            echo "   • Extended 10 epochs (vs previous 5 epochs)"
-            echo "   • Optimal 0.6 dropout (vs previous 0.8 dropout)"  
-            echo "   • Advanced regularization (mixup, cosine scheduling)"
-            echo "   • Trimodal fusion (image + radar + CSV features)"
-            echo "   • Car class recovery solutions"
-            echo "   • Train-val gap reduction <15%"
-            echo "   • Validation accuracy target >60%"
+            echo "📋 Would normally run ENHANCED ACCURACY training with:"
+            echo "   • Extended 12 epochs with adaptive LR scheduling"
+            echo "   • Focal Loss (gamma=2.0) for severe class imbalance"  
+            echo "   • Person class 2.5x boost (was 2.4% F1 → target >40%)"
+            echo "   • Balanced sampling and enhanced class weighting"
+            echo "   • Reduced dropout (0.5) for better learning capacity"
+            echo "   • Stronger mixup (0.4) and advanced regularization"
+            echo "   • Target: >60% validation accuracy, <15% train-val gap"
+            echo "🎯 Solutions address: Person class collapse + low accuracy"
             echo "🎯 Training will resume when DagHub storage is restored"
             exit 0
           fi
           
-          echo "🚀 Starting ADVANCED anti-overfitting CI training..."
-          echo "🎯 Solutions: Car class fix + Train-Val gap <15% + Validation >60%"
-          echo "⚡ Config: 10 epochs, Enhanced regularization, Mixup, Class balancing"
+          echo "🚀 Starting ENHANCED ACCURACY training..."
+          echo "🎯 Solutions: Person class recovery + High accuracy + Balanced classes"
+          echo "⚡ Config: Focal loss, Balanced sampling, Adaptive LR, Extended epochs"
           python radar_mlops.py
 
 

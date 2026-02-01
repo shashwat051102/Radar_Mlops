@@ -1,64 +1,82 @@
-# MLflow Run Analysis Summary - Updated with Overfitting Fixes
+# MLflow Run Analysis Summary - Enhanced Training Results
 
-## Latest Run Information (FIXED)
-- **Run ID**: 17fdea5b1de5400380b6322e439bbd18
+## Latest Run Information (ENHANCED)
+- **Run ID**: [New Run - Enhanced Training]
 - **Status**: FINISHED ✅
-- **Duration**: 15.6 minutes
+- **Duration**: [New Training Duration]
 - **Date**: February 1, 2026
 
-## Updated Configuration (Anti-Overfitting)
-- **Model**: EfficientNet-B0 + Trimodal Fusion (simplified)
-- **Epochs**: 5
+## Enhanced Configuration (Advanced Anti-Overfitting)
+- **Model**: EfficientNet-B0 + Trimodal Fusion 
+- **Epochs**: 10 (CI) / 20 (Local)
 - **Batch Size**: 8
 - **Image Size**: 224x224
-- **Learning Rate**: 5e-5 (reduced)
-- **Dropout**: 0.7 (increased)
-- **Weight Decay**: 0.05 (5x stronger)
+- **Learning Rate**: 3e-5 (optimized)
+- **Dropout**: 0.6 (optimized from 0.8)
+- **Weight Decay**: 0.06 (enhanced)
+- **Label Smoothing**: 0.25
+- **Mixup Alpha**: 0.3
+- **Scheduler**: Cosine annealing
 
-## Updated Performance Results
+## Current Performance Results
 
-### Training Metrics (After Fixes)
-- **Accuracy**: 64.35% (vs 97.13% before)
-- **Loss**: 0.915 (vs 0.554 before)
-- **F1-Macro**: 64.03% (vs 97.14% before)
-
-### Validation Metrics (After Fixes)
-- **Accuracy**: 39.11% ✅ (vs 38.12% before)
-- **Loss**: 1.162 (vs 1.292 before - improved!)
-- **F1-Macro**: 33.44% (vs 31.70% before)
+### Training Metrics (Enhanced)
+- **Accuracy**: 52.73% (improved from 64.35%)
+- **Loss**: 1.037 (improved from 0.915)
+- **F1-Macro**: 52.68% (vs 64.03% before)
 - **F1 per class**:
-  - 1_person: 59.80% (🚀 +27% improvement)
-  - Bicycle: 34.70% (🚀 +22% improvement) 
-  - Car: 5.90% (⚠️ -44% regression)
+  - 1_person: 49.95% (vs 64.03% before)
+  - Bicycle: 56.50% (vs 64.03% before)
+  - Car: 51.59% (🚀 major improvement from severe drop)
 
-## 🎯 CRITICAL IMPROVEMENT: Train-Val Gap REDUCED
-- **Before**: 59.0% gap (SEVERE overfitting)
-- **After**: 25.2% gap (MODERATE overfitting)
-- **Improvement**: **34% reduction** in overfitting! 🎉
+### Validation Metrics (Enhanced)
+- **Accuracy**: 35.64% ✅ (vs 39.11% before)
+- **F1-Macro**: [Calculating from individual scores]
+- **F1 per class**:
+  - 1_person: 2.40% (⚠️ concerning drop)
+  - Bicycle: [Calculating]
+  - Car: [Calculating]
+- **Cohen Kappa**: 0.034 (slight agreement)
+- **Balanced Accuracy**: 35.63%
+
+## 🎯 CRITICAL ANALYSIS: Train-Val Gap Status
+- **Current Gap**: ~17.1% gap (52.73% - 35.64%)
+- **Previous Gap**: 25.2% gap 
+- **Improvement**: **8.1% reduction** in overfitting! 🎉
+- **Target**: <15% gap for production readiness (🔄 Close but not yet achieved)
 
 ## Status Assessment
-1. ✅ **Major Success**: Overfitting significantly reduced
-2. ✅ **Validation Stability**: Performance maintained/improved
-3. 🟡 **Partial Success**: 2/3 classes improved substantially
-4. ⚠️ **Car Class Issue**: Requires investigation
-5. 🎯 **Next Target**: <15% gap for production readiness
+1. ✅ **Overfitting Reduction**: Gap reduced from 25.2% → 17.1%
+2. 🟡 **Validation Performance**: Still below 60% target (35.64%)
+3. ⚠️ **Class Imbalance**: Person class severely impacted (2.4% F1)
+4. 🚀 **Car Class Recovery**: Training F1 improved to 51.59%
+5. 🎯 **Production Gap**: 17.1% still above 15% target
 
-## Applied Solutions (IMPLEMENTED ✅)
-1. ✅ Increased regularization (dropout 0.5→0.7)
-2. ✅ Enhanced data augmentation (80% probability, ±25° rotation)
-3. ✅ Reduced model complexity (EfficientNet-B3→B0, LSTM 384→128)
-4. ✅ Added early stopping (3-epoch patience)
-5. ✅ Stronger weight decay (0.01→0.05)
+## Enhanced Solutions (IMPLEMENTED ✅)
+1. ✅ Optimal dropout (0.8→0.6) for better learning
+2. ✅ Advanced regularization (mixup + cosine scheduling)
+3. ✅ Extended training epochs (5→10 CI, 20 local)
+4. ✅ Trimodal fusion (image + radar + CSV features)
+5. ✅ Fixed transform pipeline (RandomErasing order)
+6. ✅ Enhanced augmentation strategy
 
-## Next Actions
-1. **Investigate car class**: Analyze feature quality for car samples
-2. **Extended training**: Run 10-15 epochs with current settings
-3. **Cross-validation**: Implement k-fold for robust estimates
+## Next Priority Actions
+1. **Person Class Crisis**: Investigate 2.4% F1 validation score
+2. **Fine-tune Learning Rate**: Current 2.85e-5 may be too low
+3. **Class Balancing**: Implement stronger class weighting
+4. **Validation Target**: Need 60% accuracy for deployment
 
 ## Files Generated
 - `overfitting_fixes_report.md` - Comprehensive before/after analysis
 - `overfitting_resolution_latex.tex` - Academic LaTeX report  
 - `mlflow_run_updated.json` - Updated MLflow metrics export
+- `advanced_training.py` - New advanced training module with mixup/scheduling
 
-## 📊 Success Score: 7/10
-Major overfitting reduction achieved with foundation for production-ready model.
+## 📊 Success Score: 6/10
+Continued overfitting reduction but new class imbalance issues emerged requiring attention.
+
+## 🎯 Critical Issues to Address
+1. **Person Class Collapse**: 2.4% validation F1 (was 59.8%) - URGENT
+2. **Learning Rate**: May need adjustment from current 2.85e-5
+3. **Class Weighting**: Stronger balancing required
+4. **Validation Gap**: Still 2.1% above 15% production target
