@@ -670,7 +670,7 @@ class MultimodalModel(nn.Module):
             nn.AdaptiveAvgPool2d(1)
         )
         
-        rad_feat = 256  # Updated for enhanced radar encoder
+        rad_feat = 128  # Matches actual radar encoder output
         
         # Enhanced projection layers with residual connections
         dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)  # Reduced for better performance
