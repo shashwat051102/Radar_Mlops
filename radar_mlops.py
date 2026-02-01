@@ -91,17 +91,17 @@ CONFIG = {
     # Model - CI environment override support
     "NUM_CLASSES": NUM_CLASSES,
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
-    "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b3"),  # CI: efficientnet_b3, Local: efficientnet_b3
+    "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
     # Training - Anti-overfitting settings with CI overrides
     "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # CI: 5, Local: 25
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
-    "LEARNING_RATE": 2e-4,
-    "WEIGHT_DECAY": 1e-2,
+    "LEARNING_RATE": 5e-5,
+    "WEIGHT_DECAY": 5e-2,
     "WARMUP_EPOCHS": 3,
     "LABEL_SMOOTHING": 0.2,
-    "DROPOUT_RATE": 0.5,
-    "NOISE_FACTOR": 0.1,
+    "DROPOUT_RATE": 0.7,
+    "NOISE_FACTOR": 0.2,
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -710,28 +710,24 @@ class MultimodalModel(nn.Module):
             nn.Linear(256, 256)
         )
         
-        # Enhanced LSTM with multiple layers for better temporal modeling
-        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)
+        # Reduced LSTM complexity to prevent overfitting
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.7)
         self.lstm = nn.LSTM(
-            768, 384, num_layers=2, batch_first=True,  # 256+256+256 = 768 input
-            dropout=dropout_rate * 0.6, bidirectional=True
+            768, 128, num_layers=1, batch_first=True,  # Reduced from 384 to 128
+            dropout=dropout_rate * 0.8, bidirectional=True
         )
         
-        # Enhanced classifier with attention mechanism
+        # Simplified classifier with anti-overfitting measures
         self.classifier = nn.Sequential(
-            nn.Linear(768, 512),  # 384*2 from bidirectional LSTM
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.4),
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(inplace=True),
-            nn.Dropout(0.3),
-            nn.Linear(256, 128),
+            nn.Linear(256, 128),  # 128*2 from reduced bidirectional LSTM
             nn.BatchNorm1d(128),
             nn.ReLU(inplace=True),
-            nn.Dropout(0.2),
-            nn.Linear(128, num_classes)
+            nn.Dropout(0.8),  # Very high dropout
+            nn.Linear(128, 64),
+            nn.BatchNorm1d(64),
+            nn.ReLU(inplace=True),
+            nn.Dropout(0.7),  # High dropout
+            nn.Linear(64, num_classes)
         )
         
     def forward(self, image, radar, csv_features):
@@ -1045,6 +1041,18 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
     print(f"Epochs: {CONFIG['EPOCHS']}")
     print("-" * 80)
     
+    # Anti-overfitting: Early stopping variables
+    best_val_loss = float('inf')
+    patience_counter = 0
+    patience = 3  # Stop if no improvement for 3 epochs
+    best_model_state = None
+    best_epoch = 0
+    
+    print(f"🚀 Anti-overfitting measures active:")
+    print(f"   Early stopping patience: {patience} epochs")
+    print(f"   Overfitting monitoring threshold: 30%")
+    print("-" * 80)
+    
     try:
         for epoch in range(CONFIG['EPOCHS']):
             print(f"Epoch {epoch+1}/{CONFIG['EPOCHS']}")
@@ -1061,6 +1069,33 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             val_loss, val_m = validate_epoch(
                 model, val_loader, criterion, device, val_metrics, epoch+1
             )
+            
+            # Early stopping and overfitting check
+            train_val_gap = train_m['accuracy'] - val_m['accuracy']
+            
+            # Check for improvement
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0
+                best_model_state = model.state_dict().copy()
+                best_epoch = epoch + 1
+                print(f"✅ New best validation loss: {val_loss:.4f}")
+            else:
+                patience_counter += 1
+            
+            # Overfitting monitoring
+            print(f"📊 Overfitting Monitor:")
+            print(f"   Train-Val Gap: {train_val_gap:.1%}")
+            print(f"   Patience: {patience_counter}/{patience}")
+            
+            if train_val_gap > 0.3:  # 30% gap
+                print(f"⚠️  WARNING: Severe overfitting detected!")
+            
+            # Early stopping
+            if patience_counter >= patience:
+                print(f"\\n🛑 Early stopping at epoch {epoch+1}")
+                print(f"   Best model from epoch {best_epoch}")
+                break
             
             # Get current learning rate
             current_lr = scheduler.get_last_lr()[0]

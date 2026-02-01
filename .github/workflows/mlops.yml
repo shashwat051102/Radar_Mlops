@@ -114,7 +114,7 @@ jobs:
           EPOCHS: "5"              # Quick but thorough training
           BATCH_SIZE: "8"          # Smaller for CI memory constraints
           IMAGE_SIZE: "224"        # Full resolution for quality
-          BACKBONE: "efficientnet_b3"  # Full model for quality
+          BACKBONE: "efficientnet_b0"  # Reduced model complexity
         run: |
           echo "🚀 Starting high-quality CI training..."
           echo "⚡ Config: 5 epochs, EfficientNet-B3, 224px images"
