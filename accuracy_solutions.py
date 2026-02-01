@@ -70,6 +70,7 @@ class AdvancedLRScheduler:
         
         # Identifier for compatibility checks
         self.is_advanced_scheduler = True
+        self._last_lr = [max_lr]  # Track last learning rate for get_last_lr()
         
     def step(self, epoch=None, val_acc=None):
         # Handle calls without parameters (for compatibility)
@@ -103,7 +104,12 @@ class AdvancedLRScheduler:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = lr
         
+        self._last_lr = [lr]  # Update last LR for get_last_lr()
         return lr
+        
+    def get_last_lr(self):
+        """Compatibility method for PyTorch scheduler interface"""
+        return self._last_lr
 
 
 def get_balanced_class_weights(train_labels, num_classes=3):

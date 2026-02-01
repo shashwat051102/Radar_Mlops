@@ -715,7 +715,11 @@ def create_dataloaders(samples, class_to_idx):
     print(f"   DataLoader workers: {num_workers}, pin_memory: {pin_memory}")
     print(f"   Enhanced Class weights: {dict(zip(CONFIG['CLASS_MAPPING'].values(), enhanced_class_weights))}")
     
-    return train_loader, val_loader, test_loader, enhanced_class_weights.tolist()
+    # Convert to proper format for return
+    if hasattr(enhanced_class_weights, 'tolist'):
+        return train_loader, val_loader, test_loader, enhanced_class_weights.tolist()
+    else:
+        return train_loader, val_loader, test_loader, enhanced_class_weights
 
 
 class MultimodalModel(nn.Module):
@@ -1221,16 +1225,19 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             
             # Enhanced early stopping
             current_val_metrics = {
-                'balanced_accuracy': val_m.get('balanced_accuracy', calculate_balanced_accuracy([], [])),
+                'balanced_accuracy': val_m.get('balanced_accuracy', val_m.get('accuracy', 0.0)),
                 'accuracy': val_m.get('accuracy', 0.0),
                 'f1_macro': val_m.get('f1_macro', 0.0)
             }
             
-            if early_stopping:
-                should_stop = early_stopping(current_val_metrics)
-                if should_stop:
-                    print(f"🛑 Enhanced early stopping triggered after {epoch+1} epochs")
-                    break
+            if early_stopping and hasattr(early_stopping, '__call__'):
+                try:
+                    should_stop = early_stopping(current_val_metrics)
+                    if should_stop:
+                        print(f"🛑 Enhanced early stopping triggered after {epoch+1} epochs")
+                        break
+                except Exception as e:
+                    print(f"⚠️ Enhanced early stopping failed: {e}")
             
             # Traditional early stopping and overfitting check
             train_val_gap = train_m['accuracy'] - val_m['accuracy']
@@ -1259,8 +1266,12 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
                 print(f"   Best model from epoch {best_epoch}")
                 break
             
-            # Get current learning rate
-            current_lr = scheduler.get_last_lr()[0]
+            # Get current learning rate (handle both scheduler types)
+            try:
+                current_lr = scheduler.get_last_lr()[0]
+            except AttributeError:
+                # Fallback for schedulers without get_last_lr()
+                current_lr = scheduler.optimizer.param_groups[0]['lr']
             
             # History
             history['train_loss'].append(train_loss)
