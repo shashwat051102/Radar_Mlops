@@ -241,10 +241,15 @@ class AdvancedMetricsTracker:
         self.all_targets = []
         self.losses = []
         
-    def update(self, preds, targets, loss):
+    def update(self, preds, targets, probs=None):
+        """Compatible with original MetricsTracker interface"""
         self.all_preds.extend(preds.cpu().numpy())
         self.all_targets.extend(targets.cpu().numpy())
-        self.losses.append(loss)
+        # Note: loss is not available in this interface, will calculate later if needed
+        
+    def update_loss(self, loss_value):
+        """Separate method to update loss if needed"""
+        self.losses.append(loss_value)
         
     def compute_metrics(self):
         from sklearn.metrics import classification_report, f1_score, accuracy_score
@@ -261,8 +266,8 @@ class AdvancedMetricsTracker:
         # Per-class F1 scores
         f1_per_class = f1_score(targets, preds, average=None)
         
-        # Average loss
-        avg_loss = np.mean(self.losses)
+        # Average loss (if available)
+        avg_loss = np.mean(self.losses) if self.losses else 0.0
         
         metrics = {
             'accuracy': accuracy,
@@ -277,6 +282,10 @@ class AdvancedMetricsTracker:
             metrics[f'f1_{class_name}'] = f1_per_class[i] if i < len(f1_per_class) else 0.0
             
         return metrics
+    
+    def compute(self):
+        """Compatibility method for training loop"""
+        return self.compute_metrics()
 
 
 # Configuration for enhanced training
