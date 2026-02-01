@@ -93,15 +93,18 @@ CONFIG = {
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
     "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
-    # Training - Anti-overfitting settings with CI overrides
-    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # CI: 5, Local: 25
+    # Training - Advanced anti-overfitting settings with CI overrides
+    "EPOCHS": int(os.environ.get('EPOCHS', 20)),  # Extended training: CI: 10, Local: 20
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # CI: 8, Local: 16
-    "LEARNING_RATE": 5e-5,
-    "WEIGHT_DECAY": 5e-2,
+    "LEARNING_RATE": 3e-5,  # Further reduced learning rate
+    "WEIGHT_DECAY": 8e-2,  # Stronger weight decay
     "WARMUP_EPOCHS": 3,
-    "LABEL_SMOOTHING": 0.2,
-    "DROPOUT_RATE": 0.7,
-    "NOISE_FACTOR": 0.2,
+    "LABEL_SMOOTHING": 0.3,  # Increased label smoothing
+    "DROPOUT_RATE": 0.8,  # Maximum dropout
+    "NOISE_FACTOR": 0.3,  # Enhanced augmentation
+    "GRADIENT_CLIP": 1.0,  # Gradient clipping
+    "MIXUP_ALPHA": 0.4,  # Mixup augmentation
+    "SCHEDULER": "cosine",  # Learning rate scheduling
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -193,13 +196,14 @@ class RadarDataset(Dataset):
         self.transform = transform
         self.is_training = is_training
         
-        # More conservative augmentations for training
+        # Enhanced augmentations for advanced training
         if is_training:
             self.img_transform = transforms.Compose([
                 transforms.ToPILImage(),
-                transforms.RandomRotation(10),
-                transforms.RandomHorizontalFlip(0.3),
-                transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05),
+                transforms.RandomRotation(30),  # Increased rotation
+                transforms.RandomHorizontalFlip(0.6),  # Increased flip probability
+                transforms.ColorJitter(brightness=0.4, contrast=0.4, saturation=0.3, hue=0.15),  # Stronger jitter
+                transforms.RandomErasing(p=0.2, scale=(0.02, 0.1)),  # Random erasing
                 transforms.ToTensor()
             ])
         else:
