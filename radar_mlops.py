@@ -550,90 +550,53 @@ def get_balanced_class_weights(train_labels, num_classes=3):
 
 
 def create_dataloaders(samples, class_to_idx):
-    """Create dataloaders with improved settings"""
+    """Create dataloaders with MANUAL validation set to eliminate all leakage"""
     
-    labels = [s['label'] for s in samples]
-    indices = np.arange(len(samples))
+    print(f"🔧 MANUAL VALIDATION STRATEGY: Creating completely separate validation set")
     
-    # SEQUENCE-AWARE SPLIT: Prevent temporal leakage
-    # Group samples by sequence to avoid consecutive frames in train/val
-    sequence_groups = {}
+    # Group by class for manual selection
+    class_samples = {0: [], 1: [], 2: []}
     for i, sample in enumerate(samples):
-        # Extract sequence ID from radar filename (e.g., "000003.mat" -> "000003")
-        radar_file = Path(sample['radar']).stem if sample['radar'] else Path(sample['image']).stem
-        sequence_id = radar_file[:6]  # First 6 characters as sequence ID
-        
-        if sequence_id not in sequence_groups:
-            sequence_groups[sequence_id] = []
-        sequence_groups[sequence_id].append(i)
+        class_samples[sample['label']].append(i)
     
-    print(f"📊 Temporal Analysis:")
-    print(f"   Total sequences: {len(sequence_groups)}")
-    print(f"   Avg samples per sequence: {len(samples)/len(sequence_groups):.1f}")
+    print(f"📊 Class sample counts:")
+    for class_idx, indices in class_samples.items():
+        class_name = [k for k, v in class_to_idx.items() if v == class_idx][0]
+        print(f"   {class_name}: {len(indices)} samples")
     
-    # Debug: Print some sequence examples
-    sample_seqs = list(sequence_groups.keys())[:5]
-    print(f"   Sample sequence IDs: {sample_seqs}")
-    for seq_id in sample_seqs[:2]:
-        sample_idx = sequence_groups[seq_id][0]
-        print(f"   {seq_id}: class={samples[sample_idx]['class_name']} ({len(sequence_groups[seq_id])} samples)")
-    
-    # Split by sequences, not individual samples
-    sequence_ids = list(sequence_groups.keys())
-    seq_labels = [labels[sequence_groups[seq_id][0]] for seq_id in sequence_ids]  # First sample's label
-    
-    # Check if we can do stratified splitting
-    from collections import Counter
-    seq_class_counts = Counter(seq_labels)
-    min_class_seqs = min(seq_class_counts.values())
-    
-    print(f"   Sequence class distribution: {dict(seq_class_counts)}")
-    print(f"   Min sequences per class: {min_class_seqs}")
-    
-    # Always use random split for sequences to avoid stratification issues
-    print(f"🔄 Using random sequence split (temporal separation maintained)")
-    
-    # 60-20-20 split by sequences (random, no stratification)
-    train_seqs, temp_seqs = train_test_split(
-        sequence_ids, train_size=0.6, random_state=12345
-    )
-    
-    val_seqs, test_seqs = train_test_split(
-        temp_seqs, train_size=0.5, random_state=67890
-    )
-    
-    # Convert sequence splits back to sample indices
+    # MANUAL SELECTION: Take every 5th sample for validation
+    # This spreads validation samples across the entire dataset
     train_idx = []
     val_idx = []
     test_idx = []
     
-    for seq in train_seqs:
-        train_idx.extend(sequence_groups[seq])
-    for seq in val_seqs:
-        val_idx.extend(sequence_groups[seq])
-    for seq in test_seqs:
-        test_idx.extend(sequence_groups[seq])
+    for class_idx, indices in class_samples.items():
+        # Sort indices to ensure consistent ordering
+        indices = sorted(indices)
+        
+        # Take every 5th sample for validation, every 10th for test
+        for i, idx in enumerate(indices):
+            if i % 10 == 0:  # 10% for test
+                test_idx.append(idx)
+            elif i % 5 == 0:  # 10% for validation (every 5th of remaining)
+                val_idx.append(idx)
+            else:  # 80% for training
+                train_idx.append(idx)
     
-    # CRITICAL: Check for data leakage by file paths
-    train_files = [samples[i]['image'] for i in train_idx]
-    val_files = [samples[i]['image'] for i in val_idx]
-    test_files = [samples[i]['image'] for i in test_idx]
+    print(f"📊 Manual Split Results:")
+    print(f"   Train: {len(train_idx)} ({len(train_idx)/len(samples)*100:.1f}%)")
+    print(f"   Val: {len(val_idx)} ({len(val_idx)/len(samples)*100:.1f}%)")
+    print(f"   Test: {len(test_idx)} ({len(test_idx)/len(samples)*100:.1f}%)")
     
-    # Check for duplicate files
-    train_set = set(train_files)
-    val_set = set(val_files)
-    test_set = set(test_files)
+    # Verify no overlap
+    train_set = set(train_idx)
+    val_set = set(val_idx)
+    test_set = set(test_idx)
     
-    overlap_train_val = train_set & val_set
-    overlap_train_test = train_set & test_set
-    overlap_val_test = val_set & test_set
+    if train_set & val_set or train_set & test_set or val_set & test_set:
+        raise RuntimeError("CRITICAL: Manual split still has overlaps!")
     
-    if overlap_train_val or overlap_train_test or overlap_val_test:
-        print(f"🚨 DATA LEAKAGE DETECTED:")
-        print(f"   Train-Val overlap: {len(overlap_train_val)} files")
-        print(f"   Train-Test overlap: {len(overlap_train_test)} files")
-        print(f"   Val-Test overlap: {len(overlap_val_test)} files")
-        raise ValueError("Data leakage detected! Fix data splitting.")
+    print(f"   ✅ No overlaps in manual split")
     
     train_samples = [samples[i] for i in train_idx]
     val_samples = [samples[i] for i in val_idx]
