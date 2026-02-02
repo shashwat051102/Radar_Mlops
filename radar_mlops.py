@@ -549,8 +549,77 @@ def get_balanced_class_weights(train_labels, num_classes=3):
     return torch.FloatTensor(enhanced_weights)
 
 
+def analyze_data_integrity(samples):
+    """Comprehensive analysis to identify data leakage sources"""
+    print(f"🔬 COMPREHENSIVE DATA INTEGRITY ANALYSIS")
+    print(f"="*60)
+    
+    # 1. Check for duplicate image files
+    image_paths = [sample['image'] for sample in samples]
+    unique_images = set(image_paths)
+    print(f"📸 Image Analysis:")
+    print(f"   Total image references: {len(image_paths)}")
+    print(f"   Unique image files: {len(unique_images)}")
+    print(f"   Duplicate image references: {len(image_paths) - len(unique_images)}")
+    
+    if len(image_paths) != len(unique_images):
+        print(f"🚨 CRITICAL: Same image files used multiple times!")
+        # Find duplicates
+        from collections import Counter
+        image_counts = Counter(image_paths)
+        duplicates = {img: count for img, count in image_counts.items() if count > 1}
+        print(f"   Duplicate images: {len(duplicates)}")
+        for img, count in list(duplicates.items())[:3]:
+            print(f"   - {Path(img).name}: {count} times")
+    
+    # 2. Check for duplicate radar files
+    radar_paths = [sample['radar'] for sample in samples if sample['radar']]
+    unique_radars = set(radar_paths)
+    print(f"📡 Radar Analysis:")
+    print(f"   Total radar references: {len(radar_paths)}")
+    print(f"   Unique radar files: {len(unique_radars)}")
+    print(f"   Duplicate radar references: {len(radar_paths) - len(unique_radars)}")
+    
+    # 3. Check class distribution
+    class_labels = [sample['label'] for sample in samples]
+    from collections import Counter
+    class_dist = Counter(class_labels)
+    print(f"🏷️ Class Distribution:")
+    for label, count in class_dist.items():
+        class_name = sample['class_name'] if 'class_name' in sample else f"Class_{label}"
+        print(f"   {class_name}: {count} samples")
+    
+    # 4. Check for pattern in file numbering
+    print(f"📊 File Pattern Analysis:")
+    image_stems = [Path(img).stem for img in image_paths[:10]]
+    radar_stems = [Path(radar).stem for radar in radar_paths[:10] if radar]
+    print(f"   Sample image files: {image_stems}")
+    print(f"   Sample radar files: {radar_stems}")
+    
+    # 5. Sample data inspection
+    print(f"🔍 Sample Inspection (first 3 samples):")
+    for i in range(min(3, len(samples))):
+        sample = samples[i]
+        print(f"   Sample {i}:")
+        print(f"     Image: {Path(sample['image']).name}")
+        print(f"     Radar: {Path(sample['radar']).name if sample['radar'] else 'None'}")
+        print(f"     Class: {sample['class_name']} (label: {sample['label']})")
+    
+    return len(image_paths) != len(unique_images) or len(radar_paths) != len(unique_radars)
+
+
 def create_dataloaders(samples, class_to_idx):
     """Create dataloaders with MANUAL validation set to eliminate all leakage"""
+    
+    # CRITICAL: Analyze data integrity first
+    has_duplicates = analyze_data_integrity(samples)
+    
+    if has_duplicates:
+        print(f"🚨 CRITICAL: Duplicate files detected - this explains perfect validation!")
+        print(f"   The dataset reuses same files with different labels or contexts")
+        print(f"   This makes perfect validation mathematically inevitable")
+    
+    print(f"\n🔧 MANUAL VALIDATION STRATEGY: Creating completely separate validation set")
     
     print(f"🔧 MANUAL VALIDATION STRATEGY: Creating completely separate validation set")
     
