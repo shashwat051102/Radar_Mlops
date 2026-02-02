@@ -44,6 +44,28 @@ import mlflow
 import mlflow.pytorch
 import dagshub
 
+# LoRA (Low-Rank Adaptation) Implementation
+class LoRALayer(nn.Module):
+    """LoRA layer for efficient fine-tuning"""
+    def __init__(self, in_features, out_features, rank=16, alpha=32, dropout=0.1):
+        super().__init__()
+        self.rank = rank
+        self.alpha = alpha
+        self.scaling = alpha / rank
+        
+        # LoRA matrices
+        self.lora_A = nn.Parameter(torch.randn(rank, in_features) * 0.01)
+        self.lora_B = nn.Parameter(torch.zeros(out_features, rank))
+        self.dropout = nn.Dropout(dropout)
+        
+        # Initialize with Xavier uniform
+        nn.init.xavier_uniform_(self.lora_A)
+        nn.init.zeros_(self.lora_B)
+    
+    def forward(self, x):
+        # LoRA computation: x @ (lora_A.T @ lora_B.T)
+        return self.dropout(x) @ (self.lora_A.T @ self.lora_B.T) * self.scaling
+
 # Import enhanced accuracy solutions - INTEGRATED
 class FocalLoss(nn.Module):
     """Focal Loss for addressing class imbalance"""
