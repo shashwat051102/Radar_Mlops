@@ -555,15 +555,68 @@ def create_dataloaders(samples, class_to_idx):
     labels = [s['label'] for s in samples]
     indices = np.arange(len(samples))
     
-    # 60-20-20 split (larger validation set for more reliable metrics)
-    train_idx, temp_idx = train_test_split(
-        indices, train_size=0.6, stratify=labels, random_state=42
+    # SEQUENCE-AWARE SPLIT: Prevent temporal leakage
+    # Group samples by sequence to avoid consecutive frames in train/val
+    sequence_groups = {}
+    for i, sample in enumerate(samples):
+        # Extract sequence ID from radar filename (e.g., "000003.mat" -> "000003")
+        radar_file = Path(sample['radar_path']).stem
+        sequence_id = radar_file[:6]  # First 6 characters as sequence ID
+        
+        if sequence_id not in sequence_groups:
+            sequence_groups[sequence_id] = []
+        sequence_groups[sequence_id].append(i)
+    
+    print(f"📊 Temporal Analysis:")
+    print(f"   Total sequences: {len(sequence_groups)}")
+    print(f"   Avg samples per sequence: {len(samples)/len(sequence_groups):.1f}")
+    
+    # Split by sequences, not individual samples
+    sequence_ids = list(sequence_groups.keys())
+    seq_labels = [labels[sequence_groups[seq_id][0]] for seq_id in sequence_ids]  # First sample's label
+    
+    # 60-20-20 split by sequences (prevents temporal leakage)
+    train_seqs, temp_seqs = train_test_split(
+        sequence_ids, train_size=0.6, stratify=seq_labels, random_state=12345
     )
     
-    val_idx, test_idx = train_test_split(
-        temp_idx, train_size=0.5, 
-        stratify=[labels[i] for i in temp_idx], random_state=42
+    val_seqs, test_seqs = train_test_split(
+        temp_seqs, train_size=0.5, 
+        stratify=[seq_labels[sequence_ids.index(seq)] for seq in temp_seqs], random_state=67890
     )
+    
+    # Convert sequence splits back to sample indices
+    train_idx = []
+    val_idx = []
+    test_idx = []
+    
+    for seq in train_seqs:
+        train_idx.extend(sequence_groups[seq])
+    for seq in val_seqs:
+        val_idx.extend(sequence_groups[seq])
+    for seq in test_seqs:
+        test_idx.extend(sequence_groups[seq])
+    
+    # CRITICAL: Check for data leakage by file paths
+    train_files = [samples[i]['image_path'] for i in train_idx]
+    val_files = [samples[i]['image_path'] for i in val_idx]
+    test_files = [samples[i]['image_path'] for i in test_idx]
+    
+    # Check for duplicate files
+    train_set = set(train_files)
+    val_set = set(val_files)
+    test_set = set(test_files)
+    
+    overlap_train_val = train_set & val_set
+    overlap_train_test = train_set & test_set
+    overlap_val_test = val_set & test_set
+    
+    if overlap_train_val or overlap_train_test or overlap_val_test:
+        print(f"🚨 DATA LEAKAGE DETECTED:")
+        print(f"   Train-Val overlap: {len(overlap_train_val)} files")
+        print(f"   Train-Test overlap: {len(overlap_train_test)} files")
+        print(f"   Val-Test overlap: {len(overlap_val_test)} files")
+        raise ValueError("Data leakage detected! Fix data splitting.")
     
     train_samples = [samples[i] for i in train_idx]
     val_samples = [samples[i] for i in val_idx]
@@ -904,6 +957,12 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
         print(f"🚨 VALIDATION ALERT: Suspiciously high F1 ({val_metrics['f1']:.3f})")
         print(f"   Perfect validation scores are statistically unlikely")
     
+    # EMERGENCY: Force emergency stop for impossible validation
+    if total_loss/len(loader) < 0.01 and epoch > 1:  # More aggressive
+        print(f"🚨 EMERGENCY STOP: Validation loss impossibly low ({total_loss/len(loader):.6f})")
+        print(f"   Current epoch: {epoch}, Loss: {total_loss/len(loader):.6f}")
+        print(f"   This confirms data leakage - stopping training immediately")
+        raise RuntimeError("CRITICAL: Data leakage confirmed - training aborted")
     return total_loss/len(loader), val_metrics
 
 
