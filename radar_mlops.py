@@ -560,7 +560,7 @@ def create_dataloaders(samples, class_to_idx):
     sequence_groups = {}
     for i, sample in enumerate(samples):
         # Extract sequence ID from radar filename (e.g., "000003.mat" -> "000003")
-        radar_file = Path(sample['radar_path']).stem
+        radar_file = Path(sample['radar']).stem if sample['radar'] else Path(sample['image']).stem
         sequence_id = radar_file[:6]  # First 6 characters as sequence ID
         
         if sequence_id not in sequence_groups:
@@ -598,9 +598,9 @@ def create_dataloaders(samples, class_to_idx):
         test_idx.extend(sequence_groups[seq])
     
     # CRITICAL: Check for data leakage by file paths
-    train_files = [samples[i]['image_path'] for i in train_idx]
-    val_files = [samples[i]['image_path'] for i in val_idx]
-    test_files = [samples[i]['image_path'] for i in test_idx]
+    train_files = [samples[i]['image'] for i in train_idx]
+    val_files = [samples[i]['image'] for i in val_idx]
+    test_files = [samples[i]['image'] for i in test_idx]
     
     # Check for duplicate files
     train_set = set(train_files)
