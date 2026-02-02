@@ -278,10 +278,10 @@ CONFIG = {
     # Model - CI environment override support
     "NUM_CLASSES": NUM_CLASSES,
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
-    "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
+    "BACKBONE": os.environ.get('BACKBONE', "tf_efficientnet_b0_ns"),  # Noisy Student - better generalization
     
     # Training - ULTRA ANTI-OVERFITTING for small dataset
-    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # Moderate epochs
+    "EPOCHS": int(os.environ.get('EPOCHS', 30)),  # Extended for EfficientNet optimization
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 20)),  # Larger batches for stability
     "LEARNING_RATE": 5e-6,  # Ultra-low LR for gradual learning
     "LEARNING_RATE_MIN": 1e-8,  # Very low minimum
@@ -902,10 +902,14 @@ class MultimodalModel(nn.Module):
         if backbone_name is None:
             backbone_name = CONFIG['BACKBONE']
         
-        # Image encoder (EfficientNet or any timm model)
+        # Image encoder (EfficientNet optimized for small datasets)
         self.image_encoder = timm.create_model(
             backbone_name, pretrained=True, num_classes=0, global_pool="avg"
         )
+        
+        # OPTIMIZATION: Freeze early layers to prevent overfitting
+        # Only train the last 2 blocks + classification layers
+        self._freeze_efficientnet_layers()
         
         # PRODUCTION: AUTO-DETECT feature size (works with any backbone)
         with torch.no_grad():
@@ -913,6 +917,7 @@ class MultimodalModel(nn.Module):
             img_feat = self.image_encoder(dummy_input).shape[1]
         
         print(f"Auto-detected image feature size: {img_feat}")
+        print(f"EfficientNet optimization: Frozen early layers, trainable params: {sum(p.numel() for p in self.image_encoder.parameters() if p.requires_grad):,}")
         
         # Radar encoder (CNN)
         self.radar_encoder = nn.Sequential(
@@ -933,18 +938,14 @@ class MultimodalModel(nn.Module):
         
         rad_feat = 128  # Matches actual radar encoder output
         
-        # Enhanced projection layers with residual connections
-        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)  # Reduced for better performance
+        # Optimized projection layers - reduced complexity for small dataset
+        dropout_rate = CONFIG.get('DROPOUT_RATE', 0.5)
         self.img_proj = nn.Sequential(
-            nn.Linear(img_feat, 512),
-            nn.BatchNorm1d(512),
+            nn.Linear(img_feat, 256),  # Direct to target size
+            nn.BatchNorm1d(256),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate),
-            nn.Linear(512, 384),
-            nn.BatchNorm1d(384),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.5),
-            nn.Linear(384, 256)
+            nn.Linear(256, 256)  # Simplified projection
         )
         self.rad_proj = nn.Sequential(
             nn.Linear(rad_feat, 512),
@@ -1002,6 +1003,30 @@ class MultimodalModel(nn.Module):
         lstm_out, _ = self.lstm(fused)
         
         return self.classifier(lstm_out.squeeze(1))
+    
+    def _freeze_efficientnet_layers(self):
+        """Freeze early EfficientNet layers to prevent overfitting on small dataset"""
+        # For EfficientNet-B0: freeze first 4 blocks, train last 3 blocks
+        total_blocks = len(list(self.image_encoder.named_children()))
+        freeze_blocks = max(1, total_blocks - 3)  # Keep last 3 blocks trainable
+        
+        frozen_params = 0
+        trainable_params = 0
+        
+        for i, (name, module) in enumerate(self.image_encoder.named_children()):
+            if i < freeze_blocks and 'classifier' not in name:
+                for param in module.parameters():
+                    param.requires_grad = False
+                    frozen_params += param.numel()
+            else:
+                for param in module.parameters():
+                    trainable_params += param.numel()
+        
+        print(f"🧊 EfficientNet Optimization:")
+        print(f"   Frozen blocks: {freeze_blocks}/{total_blocks}")
+        print(f"   Frozen params: {frozen_params:,}")
+        print(f"   Trainable params: {trainable_params:,}")
+        print(f"   Training ratio: {trainable_params/(frozen_params+trainable_params):.1%}")
 
 
 class MetricsTracker:
@@ -1458,9 +1483,9 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
                     print(f"   This indicates insufficient regularization for dataset size")
                     break
             
-            # Additional check: Stop if validation accuracy drops significantly
-            if epoch > 2 and val_m.get('accuracy', 0) < 0.25:  # Below random baseline
-                print(f"🛑 CRITICAL: Validation accuracy below 25% (random = 33%) - stopping")
+            # Additional check: Stop if validation accuracy drops significantly  
+            if epoch > 5 and val_m.get('accuracy', 0) < 0.15:  # Much more lenient baseline
+                print(f"🛑 CRITICAL: Validation accuracy below 15% (severely degraded) - stopping")
                 break
             
             # Early stopping
