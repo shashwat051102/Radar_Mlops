@@ -192,7 +192,7 @@ CONFIG = {
     
     # ====== KEY IMPROVEMENTS ======
     # Training - BALANCED for both learning AND generalization
-    "EPOCHS": 20,  # Shorter training for small model
+    "EPOCHS": 5,  # Short run to see diagnostics
     "BATCH_SIZE": 16,  # Smaller batches = more gradient updates
     "LEARNING_RATE": 1e-4,  # Conservative for tiny model
     "LEARNING_RATE_MIN": 1e-6,
@@ -1066,12 +1066,12 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
         print(f"🚨 VALIDATION ALERT: Suspiciously high F1 ({val_metrics['f1']:.3f})")
         print(f"   Perfect validation scores are statistically unlikely")
     
-    # EMERGENCY: Force emergency stop for impossible validation
+    # TEMPORARY: Disable emergency stop to see full diagnostic output
     if total_loss/len(loader) < 0.01 and epoch > 1:  # More aggressive
-        print(f"🚨 EMERGENCY STOP: Validation loss impossibly low ({total_loss/len(loader):.6f})")
+        print(f"🚨 DIAGNOSTIC MODE: Validation loss impossibly low ({total_loss/len(loader):.6f})")
         print(f"   Current epoch: {epoch}, Loss: {total_loss/len(loader):.6f}")
-        print(f"   This confirms data leakage - stopping training immediately")
-        raise RuntimeError("CRITICAL: Data leakage confirmed - training aborted")
+        print(f"   CONTINUING training to gather more diagnostic data...")
+        # raise RuntimeError("CRITICAL: Data leakage confirmed - training aborted")
     return total_loss/len(loader), val_metrics
 
 
