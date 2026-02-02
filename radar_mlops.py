@@ -188,13 +188,13 @@ CONFIG = {
     # Model
     "NUM_CLASSES": NUM_CLASSES,
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),
-    "BACKBONE": os.environ.get('BACKBONE', "tf_efficientnet_b0_ns"),
+    "BACKBONE": os.environ.get('BACKBONE', "mobilenetv3_small_075"),  # ULTRA-SMALL: ~1.5M params vs 5M
     
     # ====== KEY IMPROVEMENTS ======
     # Training - BALANCED for both learning AND generalization
-    "EPOCHS": 50,  # More epochs for proper convergence
+    "EPOCHS": 20,  # Shorter training for small model
     "BATCH_SIZE": 16,  # Smaller batches = more gradient updates
-    "LEARNING_RATE": 3e-4,  # MUCH HIGHER - let model learn!
+    "LEARNING_RATE": 1e-4,  # Conservative for tiny model
     "LEARNING_RATE_MIN": 1e-6,
     "WEIGHT_DECAY": 1e-4,  # Moderate L2 (was 1e-1, way too high!)
     "WARMUP_STEPS": 300,  # Steps, not epochs
@@ -665,74 +665,44 @@ class MultimodalModel(nn.Module):
         
         print(f"Auto-detected image feature size: {img_feat}")
         
-        # Improved radar encoder
+        # ULTRA-SMALL radar encoder - prevent overfitting
         self.radar_encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 3, padding=1),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(1, 16, 3, padding=1),  # Much smaller channels
             nn.ReLU(),
             nn.MaxPool2d(2),
-            nn.Dropout2d(0.1),
-            
-            nn.Conv2d(32, 64, 3, padding=1),
-            nn.BatchNorm2d(64),
-            nn.ReLU(),
-            nn.MaxPool2d(2),
-            nn.Dropout2d(0.1),
-            
-            nn.Conv2d(64, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
+            nn.Conv2d(16, 32, 3, padding=1),  # Minimal complexity
             nn.ReLU(),
             nn.AdaptiveAvgPool2d(1)
         )
         
-        rad_feat = 128
+        rad_feat = 32  # Much smaller feature size
         
-        # IMPROVED: Better projection layers with moderate dropout
+        # ULTRA-SMALL projections - prevent overfitting
         dropout_rate = CONFIG.get('DROPOUT_RATE', 0.3)
         
         self.img_proj = nn.Sequential(
-            nn.Linear(img_feat, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(inplace=True),
+            nn.Linear(img_feat, 64),  # Direct to tiny size
             nn.Dropout(dropout_rate),
-            nn.Linear(512, 256)
         )
         
         self.rad_proj = nn.Sequential(
-            nn.Linear(rad_feat, 384),
-            nn.BatchNorm1d(384),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.7),
-            nn.Linear(384, 256)
+            nn.Linear(rad_feat, 64),  # Match other projections
+            nn.Dropout(dropout_rate)
         )
         
         self.csv_proj = nn.Sequential(
-            nn.Linear(32, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.5),
-            nn.Linear(128, 256)
+            nn.Linear(32, 64),  # Much smaller
+            nn.Dropout(dropout_rate)
         )
         
-        # IMPROVED: Better fusion with attention
-        self.fusion_attention = nn.Sequential(
-            nn.Linear(768, 384),
-            nn.Tanh(),
-            nn.Linear(384, 3),
-            nn.Softmax(dim=1)
-        )
+        # ULTRA-SIMPLE: Direct concatenation (no attention)
+        fusion_size = 64 + 64 + 64  # img + rad + csv
         
-        # Simplified classifier
+        # ULTRA-SIMPLE classifier - prevent overfitting
         self.classifier = nn.Sequential(
-            nn.Linear(768, 384),
-            nn.BatchNorm1d(384),
-            nn.ReLU(inplace=True),
+            nn.Linear(fusion_size, 32),  # Very small hidden layer
             nn.Dropout(dropout_rate),
-            nn.Linear(384, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(inplace=True),
-            nn.Dropout(dropout_rate * 0.7),
-            nn.Linear(128, num_classes)
+            nn.Linear(32, num_classes)   # Direct to output
         )
         
     def forward(self, image, radar, csv_features):
@@ -741,18 +711,10 @@ class MultimodalModel(nn.Module):
         rad_feat = self.rad_proj(self.radar_encoder(radar).flatten(1))
         csv_feat = self.csv_proj(csv_features)
         
-        # Concatenate features
+        # ULTRA-SIMPLE concatenation - no attention complexity
         fused = torch.cat([img_feat, rad_feat, csv_feat], dim=1)
         
-        # Apply attention
-        attn_weights = self.fusion_attention(fused)
-        img_weighted = img_feat * attn_weights[:, 0:1]
-        rad_weighted = rad_feat * attn_weights[:, 1:2]
-        csv_weighted = csv_feat * attn_weights[:, 2:3]
-        
-        final_features = torch.cat([img_weighted, rad_weighted, csv_weighted], dim=1)
-        
-        return self.classifier(final_features)
+        return self.classifier(fused)
     
     def _smart_freeze_backbone(self):
         """Freeze only early layers, allow more learning"""
