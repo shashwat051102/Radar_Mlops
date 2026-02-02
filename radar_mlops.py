@@ -571,6 +571,13 @@ def create_dataloaders(samples, class_to_idx):
     print(f"   Total sequences: {len(sequence_groups)}")
     print(f"   Avg samples per sequence: {len(samples)/len(sequence_groups):.1f}")
     
+    # Debug: Print some sequence examples
+    sample_seqs = list(sequence_groups.keys())[:5]
+    print(f"   Sample sequence IDs: {sample_seqs}")
+    for seq_id in sample_seqs[:2]:
+        sample_idx = sequence_groups[seq_id][0]
+        print(f"   {seq_id}: class={samples[sample_idx]['class_name']} ({len(sequence_groups[seq_id])} samples)")
+    
     # Split by sequences, not individual samples
     sequence_ids = list(sequence_groups.keys())
     seq_labels = [labels[sequence_groups[seq_id][0]] for seq_id in sequence_ids]  # First sample's label
@@ -583,26 +590,17 @@ def create_dataloaders(samples, class_to_idx):
     print(f"   Sequence class distribution: {dict(seq_class_counts)}")
     print(f"   Min sequences per class: {min_class_seqs}")
     
-    if min_class_seqs < 2:
-        print(f"⚠️  WARNING: Too few sequences per class for stratification - using random split")
-        # 60-20-20 split by sequences (random, not stratified)
-        train_seqs, temp_seqs = train_test_split(
-            sequence_ids, train_size=0.6, random_state=12345
-        )
-        
-        val_seqs, test_seqs = train_test_split(
-            temp_seqs, train_size=0.5, random_state=67890
-        )
-    else:
-        # 60-20-20 split by sequences (stratified)
-        train_seqs, temp_seqs = train_test_split(
-            sequence_ids, train_size=0.6, stratify=seq_labels, random_state=12345
-        )
-        
-        val_seqs, test_seqs = train_test_split(
-            temp_seqs, train_size=0.5, 
-            stratify=[seq_labels[sequence_ids.index(seq)] for seq in temp_seqs], random_state=67890
-        )
+    # Always use random split for sequences to avoid stratification issues
+    print(f"🔄 Using random sequence split (temporal separation maintained)")
+    
+    # 60-20-20 split by sequences (random, no stratification)
+    train_seqs, temp_seqs = train_test_split(
+        sequence_ids, train_size=0.6, random_state=12345
+    )
+    
+    val_seqs, test_seqs = train_test_split(
+        temp_seqs, train_size=0.5, random_state=67890
+    )
     
     # Convert sequence splits back to sample indices
     train_idx = []
