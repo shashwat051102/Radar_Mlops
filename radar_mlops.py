@@ -141,19 +141,22 @@ class AdvancedLRScheduler:
             self._last_lr = [self.max_lr]
 
 def get_balanced_class_weights(train_labels, num_classes=3):
-    """Compute enhanced class weights to address severe class imbalance"""
+    """Compute ULTRA-enhanced class weights for severe imbalance"""
     from sklearn.utils.class_weight import compute_class_weight
     classes = np.arange(num_classes)
     class_weights = compute_class_weight('balanced', classes=classes, y=train_labels)
-    # Apply stronger boosting for failing classes: car (F1=0.0) and person
+    # Apply massive boosting for completely failing classes
     boost_factors = {
-        0: 1.0,  # bicycle - baseline
-        1: CONFIG.get('CLASS_BOOST_CAR', 2.0),   # car - strong boost (failing)
-        2: CONFIG.get('CLASS_BOOST_PERSON', 4.0) # person - very strong boost
+        0: 1.0,  # bicycle - baseline (performing okay)
+        1: CONFIG.get('CLASS_BOOST_CAR', 8.0),   # car - massive boost (F1=0.014)
+        2: CONFIG.get('CLASS_BOOST_PERSON', 6.0) # person - very strong boost
     }
+    
     enhanced_weights = []
     for i, weight in enumerate(class_weights):
         enhanced_weights.append(weight * boost_factors.get(i, 1.0))
+    
+    print(f"📊 Class weights: bicycle={enhanced_weights[0]:.2f}, car={enhanced_weights[1]:.2f}, person={enhanced_weights[2]:.2f}")
     return torch.FloatTensor(enhanced_weights)
 
 def get_weighted_sampler(dataset, class_weights):
@@ -277,24 +280,24 @@ CONFIG = {
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
     "BACKBONE": os.environ.get('BACKBONE', "efficientnet_b0"),  # CI: efficientnet_b0, Local: efficientnet_b0
     
-    # Training - ENHANCED anti-overfitting and class balance settings
-    "EPOCHS": int(os.environ.get('EPOCHS', 30)),  # Optimized training length
-    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # Safe batch size for batch norm
-    "LEARNING_RATE": 1e-5,  # Much lower LR for stable training
-    "LEARNING_RATE_MIN": 1e-7,  # Lower minimum LR
-    "WEIGHT_DECAY": 8e-2,  # Stronger regularization
-    "WARMUP_EPOCHS": 3,  # Shorter warmup
-    "LABEL_SMOOTHING": 0.3,  # Stronger label smoothing
-    "DROPOUT_RATE": 0.6,  # Stronger dropout
-    "NOISE_FACTOR": 0.1,  # Less aggressive augmentation
-    "GRADIENT_CLIP": 0.5,  # Stronger gradient clipping
-    "MIXUP_ALPHA": 0.5,  # Stronger mixup for generalization
+    # Training - ULTRA ANTI-OVERFITTING for small dataset
+    "EPOCHS": int(os.environ.get('EPOCHS', 25)),  # Moderate epochs
+    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 20)),  # Larger batches for stability
+    "LEARNING_RATE": 5e-6,  # Ultra-low LR for gradual learning
+    "LEARNING_RATE_MIN": 1e-8,  # Very low minimum
+    "WEIGHT_DECAY": 1e-1,  # Very strong L2 regularization
+    "WARMUP_EPOCHS": 2,  # Short warmup
+    "LABEL_SMOOTHING": 0.4,  # Very strong label smoothing
+    "DROPOUT_RATE": 0.7,  # Very strong dropout
+    "NOISE_FACTOR": 0.05,  # Minimal noise to preserve features
+    "GRADIENT_CLIP": 0.3,  # Very strong gradient clipping
+    "MIXUP_ALPHA": 0.8,  # Very strong mixup for generalization
     "SCHEDULER": "adaptive",  # Advanced adaptive scheduling
-    "FOCAL_LOSS_GAMMA": 3.0,  # Stronger focal loss for class imbalance
-    "CLASS_BOOST_PERSON": 4.0,  # Even stronger boost for person class
-    "CLASS_BOOST_CAR": 2.0,  # Strong boost for car class (currently failing)
-    "BALANCED_SAMPLING": True,  # Enable balanced sampling
-    "EARLY_STOPPING_PATIENCE": 6,  # Reduced patience to prevent severe overfitting
+    "FOCAL_LOSS_GAMMA": 4.0,  # Very strong focal loss
+    "CLASS_BOOST_PERSON": 6.0,  # Massive boost for person class
+    "CLASS_BOOST_CAR": 8.0,  # Massive boost for failing car class
+    "BALANCED_SAMPLING": True,  # Essential for class balance
+    "EARLY_STOPPING_PATIENCE": 4,  # Reduced patience
     
     # Classes - LOADED from JSON
     'CLASS_MAPPING': CLASS_MAPPING
@@ -1446,13 +1449,19 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             print(f"   Train-Val Gap: {train_val_gap:.1%}")
             print(f"   Patience: {patience_counter}/{patience}")
             
-            if train_val_gap > 0.25:  # 25% gap warning (lowered from 30%)
+            if train_val_gap > 0.20:  # 20% gap warning (very strict)
                 print(f"⚠️  WARNING: Severe overfitting detected!")
-                # Force stronger regularization if gap exceeds 40%
-                if train_val_gap > 0.40:
-                    print(f"🚨 CRITICAL: Train-val gap exceeds 40% - forcing early stop")
-                    print(f"   Current gap: {train_val_gap:.1%} - model likely memorizing")
+                # Force early stop if gap exceeds 30% (much stricter)
+                if train_val_gap > 0.30:
+                    print(f"🚨 CRITICAL: Train-val gap exceeds 30% - forcing early stop")
+                    print(f"   Current gap: {train_val_gap:.1%} - model memorizing training data")
+                    print(f"   This indicates insufficient regularization for dataset size")
                     break
+            
+            # Additional check: Stop if validation accuracy drops significantly
+            if epoch > 2 and val_m.get('accuracy', 0) < 0.25:  # Below random baseline
+                print(f"🛑 CRITICAL: Validation accuracy below 25% (random = 33%) - stopping")
+                break
             
             # Early stopping
             if patience_counter >= patience:
