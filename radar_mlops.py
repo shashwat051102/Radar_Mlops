@@ -304,17 +304,17 @@ CONFIG = {
     "IMAGE_SIZE": int(os.environ.get('IMAGE_SIZE', 224)),  # CI: 224, Local: 224 (full quality)
     "BACKBONE": os.environ.get('BACKBONE', "tf_efficientnet_b0_ns"),  # Noisy Student - better generalization
     
-    # LoRA Fine-tuning Configuration
+    # LoRA Fine-tuning Configuration - ULTRA-CONSERVATIVE
     "LORA_ENABLED": True,  # Enable LoRA for EfficientNet
-    "LORA_RANK": 16,  # Low rank for small dataset
-    "LORA_ALPHA": 32,  # Scaling factor
-    "LORA_DROPOUT": 0.1,  # LoRA-specific dropout
+    "LORA_RANK": 4,  # Ultra-low rank for small dataset (minimal trainable params)
+    "LORA_ALPHA": 8,  # Much reduced scaling factor (was too aggressive)
+    "LORA_DROPOUT": 0.5,  # High LoRA-specific dropout
     "LORA_TARGET_MODULES": ['conv', 'fc'],  # Target conv and fc layers
     
     # Training - ULTRA ANTI-OVERFITTING for small dataset
     "EPOCHS": int(os.environ.get('EPOCHS', 30)),  # Extended for EfficientNet optimization
     "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 20)),  # Larger batches for stability
-    "LEARNING_RATE": 1e-4,  # Higher LR for LoRA (LoRA adapters need more aggressive learning)
+    "LEARNING_RATE": 1e-5,  # Ultra-conservative for LoRA (prevent explosive learning)
     "LEARNING_RATE_MIN": 1e-8,  # Very low minimum
     "WEIGHT_DECAY": 1e-1,  # Very strong L2 regularization
     "WARMUP_EPOCHS": 2,  # Short warmup
@@ -332,7 +332,7 @@ CONFIG = {
     
     # LoRA Fine-tuning Configuration - Perfect for small datasets
     "LORA_ENABLED": True,  # Enable LoRA for EfficientNet
-    "LORA_RANK": 16,  # Low rank for small dataset (reduces params by 90%+)
+    "LORA_RANK": 8,  # Ultra-low rank for small dataset (even fewer params)
     "LORA_ALPHA": 32,  # Scaling factor
     "LORA_DROPOUT": 0.1,  # LoRA-specific dropout
     "LORA_TARGET_MODULES": ['conv', 'fc'],  # Target conv and fc layers
