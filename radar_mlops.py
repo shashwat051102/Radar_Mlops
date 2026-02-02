@@ -586,7 +586,9 @@ def analyze_data_integrity(samples):
     class_dist = Counter(class_labels)
     print(f"🏷️ Class Distribution:")
     for label, count in class_dist.items():
-        class_name = sample['class_name'] if 'class_name' in sample else f"Class_{label}"
+        # Find a sample with this label to get class name
+        sample_with_label = next((s for s in samples if s['label'] == label), None)
+        class_name = sample_with_label['class_name'] if sample_with_label and 'class_name' in sample_with_label else f"Class_{label}"
         print(f"   {class_name}: {count} samples")
     
     # 4. Check for pattern in file numbering
@@ -605,7 +607,65 @@ def analyze_data_integrity(samples):
         print(f"     Radar: {Path(sample['radar']).name if sample['radar'] else 'None'}")
         print(f"     Class: {sample['class_name']} (label: {sample['label']})")
     
-    return len(image_paths) != len(unique_images) or len(radar_paths) != len(unique_radars)
+    # 6. CRITICAL: Check if filenames leak class information  
+    print(f"🔍 Filename Pattern Leakage Analysis:")
+    class_file_patterns = {}
+    for sample in samples[:50]:  # Sample first 50
+        img_name = Path(sample['image']).name
+        radar_name = Path(sample['radar']).name if sample['radar'] else 'None'
+        class_name = sample['class_name']
+        
+        if class_name not in class_file_patterns:
+            class_file_patterns[class_name] = []
+        class_file_patterns[class_name].append((img_name, radar_name))
+    
+    for class_name, patterns in class_file_patterns.items():
+        print(f"   {class_name} files:")
+        for img, radar in patterns[:3]:  # Show first 3
+            print(f"     {img} / {radar}")
+    
+    # 7. Check if file paths contain class names
+    path_leakage = False
+    for sample in samples[:100]:
+        img_path = sample['image'].lower()
+        class_name = sample['class_name'].lower()
+        if class_name in img_path or any(cls.lower() in img_path for cls in ['bicycle', 'car', 'person']):
+            path_leakage = True
+            print(f"🚨 PATH LEAKAGE: {Path(sample['image']).name} contains class info")
+            break
+    
+    if not path_leakage:
+        print(f"✅ No obvious class names in file paths")
+    
+    # 8. Check radar data integrity
+    print(f"📡 Radar Data Integrity:")
+    radar_sizes = []
+    for sample in samples[:20]:
+        if sample['radar']:
+            try:
+                from scipy.io import loadmat
+                radar_data = loadmat(sample['radar'])
+                # Get actual data size
+                data_keys = [k for k in radar_data.keys() if not k.startswith('__')]
+                if data_keys:
+                    data_size = radar_data[data_keys[0]].shape if hasattr(radar_data[data_keys[0]], 'shape') else 'unknown'
+                    radar_sizes.append(data_size)
+            except:
+                radar_sizes.append('error')
+    
+    print(f"   Sample radar sizes: {radar_sizes[:5]}")
+    if len(set(str(s) for s in radar_sizes)) == 1:
+        print(f"🚨 SUSPICIOUS: All radar files have identical structure")
+    else:
+        print(f"✅ Radar files have varying structures")
+    
+    # Summary
+    print(f"\n📋 LEAKAGE SUMMARY:")
+    print(f"   File duplicates: {'❌ None' if not (len(image_paths) != len(unique_images)) else '🚨 Found'}")
+    print(f"   Path leakage: {'❌ None detected' if not path_leakage else '🚨 Found'}")
+    print(f"   Radar uniformity: {'🚨 All identical' if len(set(str(s) for s in radar_sizes)) == 1 else '✅ Varied'}")
+    
+    return len(image_paths) != len(unique_images) or len(radar_paths) != len(unique_radars) or path_leakage
 
 
 def create_dataloaders(samples, class_to_idx):
