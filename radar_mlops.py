@@ -555,9 +555,9 @@ def create_dataloaders(samples, class_to_idx):
     labels = [s['label'] for s in samples]
     indices = np.arange(len(samples))
     
-    # 70-15-15 split
+    # 60-20-20 split (larger validation set for more reliable metrics)
     train_idx, temp_idx = train_test_split(
-        indices, train_size=0.7, stratify=labels, random_state=42
+        indices, train_size=0.6, stratify=labels, random_state=42
     )
     
     val_idx, test_idx = train_test_split(
@@ -572,6 +572,21 @@ def create_dataloaders(samples, class_to_idx):
     train_dataset = RadarDataset(train_samples, class_to_idx, is_training=True)
     val_dataset = RadarDataset(val_samples, class_to_idx, is_training=False)
     test_dataset = RadarDataset(test_samples, class_to_idx, is_training=False)
+    
+    # DEBUGGING: Print dataset sizes and class distribution
+    print(f"🔍 Dataset Split Analysis:")
+    print(f"   Total samples: {len(samples)}")
+    print(f"   Train: {len(train_samples)} ({len(train_samples)/len(samples)*100:.1f}%)")
+    print(f"   Val: {len(val_samples)} ({len(val_samples)/len(samples)*100:.1f}%)")
+    print(f"   Test: {len(test_samples)} ({len(test_samples)/len(samples)*100:.1f}%)")
+    
+    # Check validation set class distribution
+    val_labels = [s['label'] for s in val_samples]
+    from collections import Counter
+    val_dist = Counter(val_labels)
+    print(f"   Val class distribution: {dict(val_dist)}")
+    if min(val_dist.values()) < 5:
+        print(f"⚠️  WARNING: Some classes have <5 validation samples!")
     
     # Optimized DataLoader settings
     num_workers = 4 if torch.cuda.is_available() else 2
@@ -915,7 +930,19 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
             metrics.update(preds, labels, probs.detach())
             total_loss += loss.item()
             
-    return total_loss/len(loader), metrics.compute()
+    val_metrics = metrics.compute()
+    
+    # CRITICAL: Validation sanity check for suspicious perfect scores
+    if val_metrics.get('accuracy', 0) > 0.95 and epoch > 2:
+        print(f"🚨 VALIDATION ALERT: Suspiciously high accuracy ({val_metrics['accuracy']:.3f})")
+        print(f"   This may indicate data leakage or validation set issues")
+        print(f"   Validation samples: {len(loader.dataset)}")
+        
+    if val_metrics.get('f1', 0) > 0.95 and epoch > 2:
+        print(f"🚨 VALIDATION ALERT: Suspiciously high F1 ({val_metrics['f1']:.3f})")
+        print(f"   Perfect validation scores are statistically unlikely")
+    
+    return total_loss/len(loader), val_metrics
 
 
 def train_model(model, train_loader, val_loader, test_loader, class_weights=None):
