@@ -279,7 +279,7 @@ CONFIG = {
     
     # Training - ENHANCED anti-overfitting and class balance settings
     "EPOCHS": int(os.environ.get('EPOCHS', 30)),  # Optimized training length
-    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 12)),  # Smaller batch for better generalization
+    "BATCH_SIZE": int(os.environ.get('BATCH_SIZE', 16)),  # Safe batch size for batch norm
     "LEARNING_RATE": 1e-5,  # Much lower LR for stable training
     "LEARNING_RATE_MIN": 1e-7,  # Lower minimum LR
     "WEIGHT_DECAY": 8e-2,  # Stronger regularization
@@ -1192,6 +1192,12 @@ def train_epoch(model, loader, criterion, optimizer, scheduler, device, metrics,
         radars = batch['radar'].to(device, non_blocking=True)
         csv_features = batch['csv'].to(device, non_blocking=True)
         labels = batch['label'].to(device, non_blocking=True)
+        
+        # Handle small batch sizes for batch normalization
+        current_batch_size = images.size(0)
+        if current_batch_size == 1:
+            print(f"⚠️ Warning: Batch size 1 detected, skipping batch to avoid BatchNorm error")
+            continue
         
         optimizer.zero_grad()
         outputs = model(images, radars, csv_features)

@@ -113,7 +113,7 @@ jobs:
           DAGSHUB_TOKEN: ${{ secrets.DAGSHUB_TOKEN }}
           # ANTI-OVERFITTING: Aggressive regularization for better generalization  
           EPOCHS: "12"              # Moderate epochs to prevent overfitting
-          BATCH_SIZE: "6"           # Smaller batch for better generalization
+          BATCH_SIZE: "8"           # Safe minimum for batch normalization
           IMAGE_SIZE: "224"         # Full resolution
           BACKBONE: "efficientnet_b0"  # Balanced complexity
           LEARNING_RATE: "1e-5"     # Much lower LR for stability
