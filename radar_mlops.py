@@ -575,15 +575,34 @@ def create_dataloaders(samples, class_to_idx):
     sequence_ids = list(sequence_groups.keys())
     seq_labels = [labels[sequence_groups[seq_id][0]] for seq_id in sequence_ids]  # First sample's label
     
-    # 60-20-20 split by sequences (prevents temporal leakage)
-    train_seqs, temp_seqs = train_test_split(
-        sequence_ids, train_size=0.6, stratify=seq_labels, random_state=12345
-    )
+    # Check if we can do stratified splitting
+    from collections import Counter
+    seq_class_counts = Counter(seq_labels)
+    min_class_seqs = min(seq_class_counts.values())
     
-    val_seqs, test_seqs = train_test_split(
-        temp_seqs, train_size=0.5, 
-        stratify=[seq_labels[sequence_ids.index(seq)] for seq in temp_seqs], random_state=67890
-    )
+    print(f"   Sequence class distribution: {dict(seq_class_counts)}")
+    print(f"   Min sequences per class: {min_class_seqs}")
+    
+    if min_class_seqs < 2:
+        print(f"⚠️  WARNING: Too few sequences per class for stratification - using random split")
+        # 60-20-20 split by sequences (random, not stratified)
+        train_seqs, temp_seqs = train_test_split(
+            sequence_ids, train_size=0.6, random_state=12345
+        )
+        
+        val_seqs, test_seqs = train_test_split(
+            temp_seqs, train_size=0.5, random_state=67890
+        )
+    else:
+        # 60-20-20 split by sequences (stratified)
+        train_seqs, temp_seqs = train_test_split(
+            sequence_ids, train_size=0.6, stratify=seq_labels, random_state=12345
+        )
+        
+        val_seqs, test_seqs = train_test_split(
+            temp_seqs, train_size=0.5, 
+            stratify=[seq_labels[sequence_ids.index(seq)] for seq in temp_seqs], random_state=67890
+        )
     
     # Convert sequence splits back to sample indices
     train_idx = []
