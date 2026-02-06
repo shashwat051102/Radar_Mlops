@@ -9,6 +9,11 @@ from typing import Dict, List, Tuple
 import warnings
 warnings.filterwarnings('ignore')
 
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
@@ -39,8 +44,9 @@ import timm
 from torchvision import transforms
 import torch.nn.utils as utils
 
-# import mlflow
-# import mlflow.pytorch
+import mlflow
+import mlflow.pytorch
+import dagshub
 # import dagshub
 
 # ====== CRITICAL FIXES ======
@@ -254,7 +260,7 @@ NUM_CLASSES = len(CLASS_MAPPING)
 CONFIG = {
     "DAGSHUB_USERNAME": os.getenv("DAGSHUB_USERNAME"),
     "DAGSHUB_TOKEN": os.getenv("DAGSHUB_TOKEN"),
-    "DAGSHUB_REPO": "radae_mlops",
+    "DAGSHUB_REPO": os.getenv("DAGSHUB_REPO", "radae_mlops"),
     "ENABLE_MLFLOW": os.getenv("ENABLE_MLFLOW", "false").lower() == "true",
 
     # Data
@@ -318,29 +324,30 @@ def init_mlflow():
         print("MLflow disabled")
         return None
 
-    if not CONFIG["DAGSHUB_USERNAME"] or not CONFIG["DAGSHUB_TOKEN"]:
-        print("WARNING: DAGSHUB credentials missing")
+    if not CONFIG.get("DAGSHUB_USERNAME") or not CONFIG.get("DAGSHUB_TOKEN"):
+        print("WARNING: DAGSHUB credentials missing - MLflow tracking disabled")
+        MLFLOW_ACTIVE = False
         return None
 
     try:
-        os.environ["MLFLOW_TRACKING_USERNAME"] = CONFIG["DAGSHUB_USERNAME"]
-        os.environ["MLFLOW_TRACKING_PASSWORD"] = CONFIG["DAGSHUB_TOKEN"]
-
-        tracking_uri = (
-            f"https://dagshub.com/"
-            f"{CONFIG['DAGSHUB_USERNAME']}/"
-            f"{CONFIG['DAGSHUB_REPO']}.mlflow"
+        # Use DagHub client to setup connection as per instructions
+        dagshub.init(
+            repo_owner=CONFIG["DAGSHUB_USERNAME"], 
+            repo_name=CONFIG["DAGSHUB_REPO"], 
+            mlflow=True
         )
-
-        mlflow.set_tracking_uri(tracking_uri)
+        
+        # Set experiment
         mlflow.set_experiment("Radar_MLOps_Improved")
-
-        print(f"MLflow tracking at {tracking_uri}")
+        
+        tracking_uri = mlflow.get_tracking_uri()
+        print(f"✅ MLflow tracking with DagHub: {tracking_uri}")
         MLFLOW_ACTIVE = True
         return tracking_uri
         
     except Exception as e:
-        print(f"WARNING: MLflow initialization failed: {e}")
+        print(f"⚠️  WARNING: MLflow initialization failed: {e}")
+        print("Training will continue without MLflow tracking")
         MLFLOW_ACTIVE = False
         return None
 
@@ -1581,7 +1588,7 @@ def evaluate_test(test_loader):
     if not os.path.exists(checkpoint_path):
         raise RuntimeError(f"Model not found: {checkpoint_path}")
     
-    checkpoint = torch.load(checkpoint_path, map_location=device)
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint['model_state_dict'])
     model.eval()
     
@@ -1632,6 +1639,14 @@ if __name__ == "__main__":
     
     MLFLOW_URI = init_mlflow()
     
+    # Start MLflow run if active
+    if MLFLOW_ACTIVE:
+        try:
+            mlflow.start_run()
+            print("🚀 MLflow experiment started")
+        except Exception as e:
+            print(f"MLflow start error: {e}")
+    
     samples, class_to_idx = load_dataset(CONFIG["DATA_DIR"])
     
     train_loader, val_loader, test_loader, class_weights = create_dataloaders(
@@ -1646,6 +1661,23 @@ if __name__ == "__main__":
     print(f"   Total parameters: {param_stats['total']:,}")
     print(f"   Trainable parameters: {param_stats['trainable']:,}")
     print(f"   Frozen parameters: {param_stats['frozen']:,}")
+    
+    # Log model parameters to MLflow
+    if MLFLOW_ACTIVE:
+        try:
+            log_params({
+                "total_parameters": param_stats['total'],
+                "trainable_parameters": param_stats['trainable'],
+                "frozen_parameters": param_stats['frozen'],
+                "batch_size": CONFIG["BATCH_SIZE"],
+                "learning_rate": CONFIG["LEARNING_RATE"],
+                "epochs": CONFIG["EPOCHS"],
+                "num_classes": CONFIG['NUM_CLASSES'],
+                "model_type": "MultimodalRadarModel"
+            })
+            print("📊 Parameters logged to MLflow")
+        except Exception as e:
+            print(f"MLflow parameter logging error: {e}")
     
     if CONFIG.get('LORA_ENABLED', False):
         lora_params = model.get_lora_parameters()
@@ -1662,3 +1694,21 @@ if __name__ == "__main__":
     
     # Evaluate on test set
     test_metrics = evaluate_test(test_loader)
+    
+    # Log final results to MLflow
+    if MLFLOW_ACTIVE:
+        try:
+            log_metrics({
+                "final_test_accuracy": test_metrics.get('accuracy', 0),
+                "final_test_f1": test_metrics.get('f1_score', 0),
+                "best_val_accuracy": best_acc
+            })
+            
+            # Log model
+            log_model(model, "radar_model")
+            
+            # End MLflow run
+            mlflow.end_run()
+            print("✅ Training results logged to MLflow")
+        except Exception as e:
+            print(f"MLflow final logging error: {e}")

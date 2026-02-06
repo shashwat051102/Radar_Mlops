@@ -11,12 +11,10 @@ services:
     environment:
       DAGSHUB_USERNAME: ${DAGSHUB_USERNAME}
       DAGSHUB_TOKEN: ${DAGSHUB_TOKEN}
-      MLFLOW_TRACKING_URI: http://mlflow:5000
+      ENABLE_MLFLOW: "true"
     deploy: {}
     runtime: nvidia
     gpus: all
-    depends_on:
-      - mlflow
 
   jupyter:
     build: .
@@ -32,24 +30,7 @@ services:
     volumes:
       - .:/app
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
+      DAGSHUB_USERNAME: ${DAGSHUB_USERNAME}
+      DAGSHUB_TOKEN: ${DAGSHUB_TOKEN}
+      ENABLE_MLFLOW: "true"
 
-  mlflow:
-    image: python:3.10-slim
-    container_name: radar-mlflow
-    command: >
-      sh -c "
-      pip install mlflow &&
-      mlflow server
-      --host 0.0.0.0
-      --port 5000
-      --backend-store-uri /mlflow/mlruns
-      --default-artifact-root /mlflow/artifacts
-      "
-    ports:
-      - "5000:5000"
-    volumes:
-      - mlflow_data:/mlflow
-
-volumes:
-  mlflow_data:
