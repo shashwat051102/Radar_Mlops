@@ -1091,20 +1091,37 @@ class SimpleMetrics:
         
     def compute(self):
         if not self.all_preds:
-            return {'accuracy': 0.0, 'f1': 0.0}
+            return {
+                'accuracy': 0.0, 'f1': 0.0, 'f1_macro': 0.0, 'balanced_accuracy': 0.0,
+                'precision': 0.0, 'recall': 0.0, 'f1_weighted': 0.0
+            }
             
         all_preds = torch.cat(self.all_preds).numpy()
         all_labels = torch.cat(self.all_labels).numpy()
         
-        acc = (all_preds == all_labels).mean()
+        from sklearn.metrics import (
+            f1_score, accuracy_score, balanced_accuracy_score,
+            precision_score, recall_score
+        )
         
-        # Simple F1 calculation
-        from sklearn.metrics import f1_score, accuracy_score
-        f1 = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+        acc = accuracy_score(all_labels, all_preds)
+        balanced_acc = balanced_accuracy_score(all_labels, all_preds)
+        f1_macro = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+        f1_weighted = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+        precision = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+        recall = recall_score(all_labels, all_preds, average='macro', zero_division=0)
         f1_per_class = f1_score(all_labels, all_preds, average=None, zero_division=0)
         
         class_names = ['bicycle', 'car', '1_person']
-        metrics = {'accuracy': acc, 'f1': f1, 'f1_macro': f1}  # Add both keys for compatibility
+        metrics = {
+            'accuracy': acc, 
+            'f1': f1_macro,
+            'f1_macro': f1_macro,
+            'f1_weighted': f1_weighted,
+            'balanced_accuracy': balanced_acc,
+            'precision': precision,
+            'recall': recall
+        }
         
         for i, name in enumerate(class_names):
             if i < len(f1_per_class):
