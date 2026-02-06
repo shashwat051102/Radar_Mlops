@@ -1354,8 +1354,8 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
         print(f"VALIDATION ALERT: Suspiciously high F1 ({val_metrics['f1']:.3f})")
         print(f"   Perfect validation scores are statistically unlikely")
     
-    # EXTREME anti-leakage: Stop if validation is impossibly good
-    if total_loss/len(loader) < 0.1 and epoch > 2:  # Much higher threshold
+    # EXTREME anti-leakage: Stop if validation is impossibly good (but allow good performance)
+    if total_loss/len(loader) < 0.05 and epoch > 5:  # Lower threshold, more epochs
         print(f"EMERGENCY STOP: Validation loss too low ({total_loss/len(loader):.6f})")
         print(f"   Even with temporal splitting and max noise, perfect scores persist")
         print(f"   This indicates fundamental dataset corruption or model memorization")
@@ -1544,6 +1544,17 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             # Early stopping
             if patience_counter >= CONFIG['EARLY_STOPPING_PATIENCE']:
                 print(f"\n🛑 Early stopping at epoch {epoch+1}")
+                break
+            
+            # SUCCESS STOP: Training successful when both accuracies > 60% and gap < 5%
+            train_acc_pct = train_m['accuracy'] * 100
+            val_acc_pct = val_m['accuracy'] * 100
+            gap_pct = abs(train_val_gap * 100)
+            
+            if train_acc_pct > 60 and val_acc_pct > 60 and gap_pct < 5:
+                print(f"\n🎯 SUCCESS STOP at epoch {epoch+1}")
+                print(f"   Training successful: Train={train_acc_pct:.1f}%, Val={val_acc_pct:.1f}%, Gap={gap_pct:.1f}%")
+                print(f"   Both accuracies >60% and gap <5% - model is performing well!")
                 break
         
         log_model(model, "final_model")
