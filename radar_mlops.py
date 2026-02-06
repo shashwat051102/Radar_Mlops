@@ -1643,6 +1643,9 @@ if __name__ == "__main__":
     if MLFLOW_ACTIVE:
         try:
             mlflow.start_run()
+            # Set initial status
+            mlflow.set_tag("mlflow.runStatus", "RUNNING")
+            mlflow.set_tag("training_status", "STARTED")
             print("🚀 MLflow experiment started")
         except Exception as e:
             print(f"MLflow start error: {e}")
@@ -1684,31 +1687,55 @@ if __name__ == "__main__":
         print(f"   LoRA parameters: {len(lora_params):,}")
         print(f"   LoRA efficiency: {len(lora_params) / param_stats['trainable'] * 100:.1f}% of trainable")
     
-    history, best_acc = train_model(
-        model, train_loader, val_loader, test_loader, class_weights
-    )
+    try:
+        history, best_acc = train_model(
+            model, train_loader, val_loader, test_loader, class_weights
+        )
+        
+        print("\n" + "=" * 80)
+        print(f"Training completed! Best validation accuracy: {best_acc:.4f}")
+        print("=" * 80)
+        
+        # Evaluate on test set
+        test_metrics = evaluate_test(test_loader)
+        
+        # Log final results to MLflow
+        if MLFLOW_ACTIVE:
+            try:
+                log_metrics({
+                    "final_test_accuracy": test_metrics.get('accuracy', 0),
+                    "final_test_f1": test_metrics.get('f1_score', 0),
+                    "best_val_accuracy": best_acc
+                })
+                
+                # Log model
+                log_model(model, "radar_model")
+                
+                # Set run status as finished
+                mlflow.set_tag("mlflow.runStatus", "FINISHED")
+                mlflow.set_tag("training_status", "SUCCESS")
+                print("✅ Training results logged to MLflow")
+            except Exception as e:
+                print(f"MLflow final logging error: {e}")
     
-    print("\n" + "=" * 80)
-    print(f"Training completed! Best validation accuracy: {best_acc:.4f}")
-    print("=" * 80)
+    except Exception as e:
+        print(f"Training error: {e}")
+        if MLFLOW_ACTIVE:
+            # Log the error to MLflow
+            try:
+                log_metrics({"training_error": 1})
+                log_params({"error_message": str(e)})
+                mlflow.set_tag("mlflow.runStatus", "FAILED")
+                mlflow.set_tag("training_status", "FAILED")
+                print("❌ Training error logged to MLflow")
+            except:
+                print("Failed to log error to MLflow")
     
-    # Evaluate on test set
-    test_metrics = evaluate_test(test_loader)
-    
-    # Log final results to MLflow
-    if MLFLOW_ACTIVE:
-        try:
-            log_metrics({
-                "final_test_accuracy": test_metrics.get('accuracy', 0),
-                "final_test_f1": test_metrics.get('f1_score', 0),
-                "best_val_accuracy": best_acc
-            })
-            
-            # Log model
-            log_model(model, "radar_model")
-            
-            # End MLflow run
-            mlflow.end_run()
-            print("✅ Training results logged to MLflow")
-        except Exception as e:
-            print(f"MLflow final logging error: {e}")
+    finally:
+        # Always end MLflow run to prevent unfinished experiments
+        if MLFLOW_ACTIVE:
+            try:
+                mlflow.end_run()
+                print("🏁 MLflow experiment run ended")
+            except Exception as e:
+                print(f"Error ending MLflow run: {e}")
