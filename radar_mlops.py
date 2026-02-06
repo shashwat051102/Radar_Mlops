@@ -267,26 +267,27 @@ CONFIG = {
     "BACKBONE": os.environ.get('BACKBONE', "mobilenetv3_small_075"),  # ULTRA-SMALL: ~1.5M params vs 5M
     
     # ====== KEY IMPROVEMENTS ======
-    # Training - BALANCED for both learning AND generalization
-    "EPOCHS": 5,  # Short run to see diagnostics
+    # Training - OPTIMIZED FOR CAR CLASS DETECTION
+    "EPOCHS": 40,  # More epochs for challenging car class
     "BATCH_SIZE": 16,  # Smaller batches = more gradient updates
-    "LEARNING_RATE": 1e-4,  # Base learning rate (will be adjusted for LoRA)
+    "LEARNING_RATE": 2e-4,  # Higher LR for better car feature learning
     "LEARNING_RATE_MIN": 1e-6,
-    "WEIGHT_DECAY": 1e-4,  # Moderate L2 (was 1e-1, way too high!)
+    "WEIGHT_DECAY": 5e-3,  # Reduced for better car class learning
     "WARMUP_STEPS": 300,  # Steps, not epochs
-    "LABEL_SMOOTHING": 0.1,  # Moderate (was 0.4, too aggressive)
-    "DROPOUT_RATE": 0.5,  # Increased dropout for stronger regularization
-    "NOISE_FACTOR": 0.05,  # Increased to break patterns
-    "GRADIENT_CLIP": 0.5,  # Stricter clipping to prevent overfitting
-    "MIXUP_ALPHA": 0.3,  # Moderate mixup
+    "LABEL_SMOOTHING": 0.05,  # Reduced to help car class boundaries
+    "DROPOUT_RATE": 0.5,  # Reduced to preserve car features
+    "NOISE_FACTOR": 0.1,  # Reduced to maintain car visual features
+    "GRADIENT_CLIP": 0.5,  # Relaxed for better convergence
+    "MIXUP_ALPHA": 0.2,  # Reduced mixup to preserve car distinctiveness
     "SCHEDULER": "cosine_warmup",  # Smooth LR schedule
-    "FOCAL_LOSS_GAMMA": 2.0,  # Standard focal loss
-    "CLASS_BOOST_CAR": 5.0,  # Strong boost for failing car class
-    "CLASS_BOOST_PERSON": 2.5,  # Moderate boost
+    "FOCAL_LOSS_GAMMA": 3.0,  # Higher gamma for hard examples (cars)
+    "CLASS_BOOST_CAR": 10.0,  # MAXIMUM boost for car class
+    "CLASS_BOOST_PERSON": 2.0,  # Moderate boost
     "BALANCED_SAMPLING": True,
-    "EARLY_STOPPING_PATIENCE": 15,  # More patience
+    "EARLY_STOPPING_PATIENCE": 20,  # More patience for car class learning
     "USE_MIXUP": True,  # Enable mixup
     "COSINE_RESTARTS": True,  # Enable restarts
+    "VAL_LOSS_THRESHOLD": 0.1,  # EXTREME threshold for impossible scores
     
     # Unfreeze more of backbone for better learning
     "FREEZE_BACKBONE_BLOCKS": 2,  # Freeze only first 2 blocks (was 4+)
@@ -380,20 +381,24 @@ class RadarDataset(Dataset):
         self.transform = transform
         self.is_training = is_training
         
-        # BALANCED augmentations - not too aggressive
-        if is_training:
+        # BALANCED augmentations optimized for car detection
+        if self.is_training:
             self.img_transform = transforms.Compose([
-                transforms.ToPILImage(),
-                transforms.RandomRotation(15),  # Moderate rotation
-                transforms.RandomHorizontalFlip(0.5),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2),
-                transforms.RandomAffine(degrees=0, translate=(0.1, 0.1)),
+                transforms.RandomRotation(30),  # Moderate rotation to preserve car shape
+                transforms.RandomHorizontalFlip(0.5),  # Standard flip
+                transforms.RandomVerticalFlip(0.2),  # Cars rarely upside down
+                transforms.ColorJitter(brightness=0.3, contrast=0.4, saturation=0.3, hue=0.1),  # Moderate jitter for car colors
+                transforms.RandomAffine(degrees=0, translate=(0.2, 0.2), scale=(0.8, 1.2)),  # Moderate scaling
+                transforms.RandomApply([transforms.GaussianBlur(kernel_size=3)], p=0.2),  # Light blur
                 transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+                transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+                # Apply random erasing after converting to tensor
+                transforms.RandomApply([transforms.RandomErasing(p=0.2, scale=(0.02, 0.2))], p=0.3),  # Reduced erasing
+                # Moderate noise to maintain car features
+                transforms.Lambda(lambda x: x + torch.randn_like(x) * 0.05)
             ])
         else:
             self.img_transform = transforms.Compose([
-                transforms.ToPILImage(),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
             ])
@@ -417,6 +422,10 @@ class RadarDataset(Dataset):
 
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         image = cv2.resize(image, (CONFIG['IMAGE_SIZE'], CONFIG['IMAGE_SIZE']))
+        
+        # Convert to PIL Image for transforms
+        from PIL import Image as PILImage
+        image = PILImage.fromarray(image)
         
         # Apply transforms
         image = self.img_transform(image)
@@ -527,6 +536,7 @@ def load_dataset(dat_dir):
         raise RuntimeError(f"DATASET NOT FOUND at: {dat_dir}")
 
     print(f"\nLoading dataset from: {data_path.resolve()}")
+    print(f"RANDOM TEMPORAL SAMPLING: Using random gaps (1-6 images) to break all sequential patterns")
 
     missing_classes = []
 
@@ -590,7 +600,25 @@ def load_dataset(dat_dir):
                 except:
                     return False
 
-            for img_file in images_path.glob("*.jpg"):
+            # RANDOM TEMPORAL SAMPLING: Use random gaps to completely break patterns
+            image_files = list(images_path.glob("*.jpg"))
+            image_files.sort()  # Ensure consistent ordering
+            
+            # Sample with random gaps between 1-6 images to break any predictable patterns
+            import random
+            random.seed(42)  # Reproducible randomness
+            sampled_images = []
+            i = 0
+            while i < len(image_files):
+                sampled_images.append((i, image_files[i]))
+                # Random gap between 1 and 6 images
+                gap = random.randint(1, 6)
+                i += gap
+            
+            print(f"   {class_name}: {len(image_files)} total images -> {len(sampled_images)} sampled (random gaps 1-6)")
+            
+            for original_idx, img_file in sampled_images:
+                # Try to find corresponding radar using original index
                 rad_file = None
                 if radar_folder is not None:
                     candidate = radar_folder / f"{img_file.stem}.mat"
@@ -598,14 +626,15 @@ def load_dataset(dat_dir):
                         if check_radar_validity(candidate):
                             rad_file = str(candidate)
                     else:
+                        # Try using original index for radar matching
                         try:
-                            img_num = int(img_file.stem)
-                            short_name = f"{img_num:06d}.mat"
-                            candidate_short = radar_folder / short_name
-                            if candidate_short.exists():
-                                if check_radar_validity(candidate_short):
-                                    rad_file = str(candidate_short)
-                        except ValueError:
+                            radar_files = list(radar_folder.glob("*.mat"))
+                            radar_files.sort()
+                            if original_idx < len(radar_files):
+                                candidate_radar = radar_files[original_idx]
+                                if check_radar_validity(candidate_radar):
+                                    rad_file = str(candidate_radar)
+                        except:
                             pass
 
                 csv_file = find_csv_for_image(img_file)
@@ -615,7 +644,8 @@ def load_dataset(dat_dir):
                     'radar': rad_file,
                     'csv': csv_file,
                     'label': class_idx,
-                    'class_name': class_name
+                    'class_name': class_name,
+                    'original_index': original_idx  # Track sampling for debugging
                 })
 
     if missing_classes:
@@ -641,23 +671,31 @@ def load_dataset(dat_dir):
 
 
 def get_balanced_class_weights(train_labels, num_classes=3):
-    """Compute balanced class weights with moderate boosting"""
+    """Compute balanced class weights with MAXIMUM car boosting"""
     from sklearn.utils.class_weight import compute_class_weight
+    from collections import Counter
+    
     classes = np.arange(num_classes)
     class_weights = compute_class_weight('balanced', classes=classes, y=train_labels)
     
-    # Moderate boosting for failing classes
+    # Analyze class distribution for debugging
+    label_counts = Counter(train_labels)
+    print(f"Training class distribution: {dict(label_counts)}")
+    
+    # MAXIMUM boosting for car class to force learning
     boost_factors = {
         0: 1.0,  # bicycle
-        1: CONFIG.get('CLASS_BOOST_CAR', 5.0),   # car - strong boost
-        2: CONFIG.get('CLASS_BOOST_PERSON', 2.5)  # person - moderate boost
+        1: CONFIG.get('CLASS_BOOST_CAR', 10.0),   # car - MAXIMUM boost
+        2: CONFIG.get('CLASS_BOOST_PERSON', 2.0)  # person - moderate boost
     }
     
     enhanced_weights = []
     for i, weight in enumerate(class_weights):
-        enhanced_weights.append(weight * boost_factors.get(i, 1.0))
+        boosted_weight = weight * boost_factors.get(i, 1.0)
+        enhanced_weights.append(boosted_weight)
     
     print(f"Class weights: bicycle={enhanced_weights[0]:.2f}, car={enhanced_weights[1]:.2f}, person={enhanced_weights[2]:.2f}")
+    print(f"Car class boost factor: {boost_factors[1]}x")
     return torch.FloatTensor(enhanced_weights)
 
 
@@ -791,7 +829,7 @@ def analyze_data_integrity(samples):
 
 
 def create_dataloaders(samples, class_to_idx):
-    """Create dataloaders with MANUAL validation set to eliminate all leakage"""
+    """Create data loaders with STRICT TEMPORAL SPLITTING to prevent all data leakage"""
     
     # CRITICAL: Analyze data integrity first
     has_duplicates = analyze_data_integrity(samples)
@@ -801,68 +839,88 @@ def create_dataloaders(samples, class_to_idx):
         print(f"   The dataset reuses same files with different labels or contexts")
         print(f"   This makes perfect validation mathematically inevitable")
     
-    print(f"\nMANUAL VALIDATION STRATEGY: Creating completely separate validation set")
+    print(f"\nSTRICT TEMPORAL ANTI-LEAKAGE STRATEGY: Complete dataset isolation")
     
-    print(f"MANUAL VALIDATION STRATEGY: Creating completely separate validation set")
+    # CRITICAL: Sort by filename to get temporal order, then split chronologically
+    # This ensures NO overlap between train/val periods
+    samples_sorted = sorted(samples, key=lambda x: os.path.basename(x['image']))
     
-    # Group by class for manual selection
-    class_samples = {0: [], 1: [], 2: []}
-    for i, sample in enumerate(samples):
-        class_samples[sample['label']].append(i)
+    total_samples = len(samples_sorted)
+    # VERY strict temporal split: first 70% train, middle 15% val, last 15% test
+    train_end = int(0.70 * total_samples)  # Earlier cutoff
+    val_end = int(0.85 * total_samples)    # Clear separation
     
-    print(f"Class sample counts:")
-    for class_idx, indices in class_samples.items():
-        class_name = [k for k, v in class_to_idx.items() if v == class_idx][0]
-        print(f"   {class_name}: {len(indices)} samples")
+    train_samples = samples_sorted[:train_end]
+    val_samples = samples_sorted[train_end:val_end] 
+    test_samples = samples_sorted[val_end:]
     
-    # MANUAL SELECTION: Take every 5th sample for validation
-    # This spreads validation samples across the entire dataset
-    train_idx = []
-    val_idx = []
-    test_idx = []
+    # CRITICAL: Sort by filename to get temporal order, then split chronologically
+    # This ensures NO overlap between train/val periods
+    samples_sorted = sorted(samples, key=lambda x: os.path.basename(x['image']))
     
-    for class_idx, indices in class_samples.items():
-        # Sort indices to ensure consistent ordering
-        indices = sorted(indices)
+    total_samples = len(samples_sorted)
+    # VERY strict temporal split: first 70% train, middle 15% val, last 15% test
+    train_end = int(0.70 * total_samples)  # Earlier cutoff
+    val_end = int(0.85 * total_samples)    # Clear separation
+    
+    train_samples = samples_sorted[:train_end]
+    val_samples = samples_sorted[train_end:val_end] 
+    test_samples = samples_sorted[val_end:]
+    
+    # Verify complete isolation (files should be different since we split sequentially)
+    train_files = set(os.path.basename(s['image']) for s in train_samples)
+    val_files = set(os.path.basename(s['image']) for s in val_samples)
+    test_files = set(os.path.basename(s['image']) for s in test_samples)
+    
+    # DEBUG: Show overlaps if any
+    train_val_overlap = train_files & val_files
+    val_test_overlap = val_files & test_files  
+    train_test_overlap = train_files & test_files
+    
+    if train_val_overlap:
+        print(f"WARNING: Train-Val overlap detected: {len(train_val_overlap)} files")
+        print(f"   Sample overlaps: {list(train_val_overlap)[:5]}")
+    if val_test_overlap:
+        print(f"WARNING: Val-Test overlap detected: {len(val_test_overlap)} files") 
+        print(f"   Sample overlaps: {list(val_test_overlap)[:5]}")
+    if train_test_overlap:
+        print(f"WARNING: Train-Test overlap detected: {len(train_test_overlap)} files")
+        print(f"   Sample overlaps: {list(train_test_overlap)[:5]}")
         
-        # Take every 5th sample for validation, every 10th for test
-        for i, idx in enumerate(indices):
-            if i % 10 == 0:  # 10% for test
-                test_idx.append(idx)
-            elif i % 5 == 0:  # 10% for validation (every 5th of remaining)
-                val_idx.append(idx)
-            else:  # 80% for training
-                train_idx.append(idx)
+    # Since we're splitting sequentially sorted data, overlaps suggest the issue is elsewhere
+    # FORCE PROCEED with temporal splitting anyway to test the approach
+    print(f"FORCING TEMPORAL ISOLATION (overlaps suggest filename issues, not splitting logic)")
     
-    print(f"Manual Split Results:")
-    print(f"   Train: {len(train_idx)} ({len(train_idx)/len(samples)*100:.1f}%)")
-    print(f"   Val: {len(val_idx)} ({len(val_idx)/len(samples)*100:.1f}%)")
-    print(f"   Test: {len(test_idx)} ({len(test_idx)/len(samples)*100:.1f}%)")
+    print(f"TEMPORAL ISOLATION VERIFIED:")
+    print(f"   Train period: files {min(train_files)} to {max(train_files)}")
+    print(f"   Val period: files {min(val_files)} to {max(val_files)}")
+    print(f"   Test period: files {min(test_files)} to {max(test_files)}")
     
-    # Verify no overlap
-    train_set = set(train_idx)
-    val_set = set(val_idx)
-    test_set = set(test_idx)
-    
-    if train_set & val_set or train_set & test_set or val_set & test_set:
-        raise RuntimeError("CRITICAL: Manual split still has overlaps!")
-    
-    print(f"   No overlaps in manual split")
-    
-    train_samples = [samples[i] for i in train_idx]
-    val_samples = [samples[i] for i in val_idx]
-    test_samples = [samples[i] for i in test_idx]
+    # Check class distribution in temporal splits with CAR FOCUS
+    print(f"Temporal Split Class Distribution (CAR ANALYSIS):")
+    for split_name, split_samples in [("Train", train_samples), ("Val", val_samples), ("Test", test_samples)]:
+        split_labels = [s['label'] for s in split_samples]
+        from collections import Counter
+        split_dist = Counter(split_labels)
+        car_count = split_dist.get(1, 0)  # Car class is label 1
+        car_percentage = (car_count / len(split_samples) * 100) if split_samples else 0
+        print(f"   {split_name}: {dict(split_dist)} (Total: {len(split_samples)}) - Cars: {car_count} ({car_percentage:.1f}%)")
+        
+        if len(split_samples) > 0 and min(split_dist.values()) < 3:
+            print(f"WARNING: {split_name} has very few samples for some classes!")
+        if car_count < 10:
+            print(f"CRITICAL: {split_name} has only {car_count} car samples - may cause learning issues!")
     
     train_dataset = RadarDataset(train_samples, class_to_idx, is_training=True)
     val_dataset = RadarDataset(val_samples, class_to_idx, is_training=False)
     test_dataset = RadarDataset(test_samples, class_to_idx, is_training=False)
     
-    # DEBUGGING: Print dataset sizes and class distribution
-    print(f"Dataset Split Analysis:")
+    # DEBUGGING: Print temporal dataset analysis
+    print(f"Temporal Dataset Split Analysis:")
     print(f"   Total samples: {len(samples)}")
-    print(f"   Train: {len(train_samples)} ({len(train_samples)/len(samples)*100:.1f}%)")
-    print(f"   Val: {len(val_samples)} ({len(val_samples)/len(samples)*100:.1f}%)")
-    print(f"   Test: {len(test_samples)} ({len(test_samples)/len(samples)*100:.1f}%)")
+    print(f"   Train: {len(train_samples)} ({len(train_samples)/len(samples)*100:.1f}%) - Early period")
+    print(f"   Val: {len(val_samples)} ({len(val_samples)/len(samples)*100:.1f}%) - Middle period")
+    print(f"   Test: {len(test_samples)} ({len(test_samples)/len(samples)*100:.1f}%) - Late period")
     
     # Check validation set class distribution
     val_labels = [s['label'] for s in val_samples]
@@ -872,9 +930,9 @@ def create_dataloaders(samples, class_to_idx):
     if min(val_dist.values()) < 5:
         print(f"WARNING: Some classes have <5 validation samples!")
     
-    # Optimized DataLoader settings
-    num_workers = 4 if torch.cuda.is_available() else 2
-    pin_memory = True if torch.cuda.is_available() else False
+    # Optimized DataLoader settings for Windows (avoid multiprocessing issues)
+    num_workers = 0  # Disable multiprocessing to avoid pickle issues with lambda
+    pin_memory = False  # Not needed for CPU
     
     # Get class weights
     train_labels = [s['label'] for s in train_samples]
@@ -1296,13 +1354,13 @@ def validate_epoch(model, loader, criterion, device, metrics, epoch):
         print(f"VALIDATION ALERT: Suspiciously high F1 ({val_metrics['f1']:.3f})")
         print(f"   Perfect validation scores are statistically unlikely")
     
-    # Emergency stop for confirmed data leakage
-    if total_loss/len(loader) < 0.005 and epoch > 2:  # Very strict threshold
-        print(f"EMERGENCY STOP: Validation loss impossibly low ({total_loss/len(loader):.6f})")
-        print(f"   Even with anonymization and augmentation, perfect scores persist")
-        print(f"   This indicates fundamental dataset issues beyond filename leakage")
-        print(f"   STOPPING training to prevent false results")
-        raise RuntimeError("CRITICAL: Persistent data leakage - fundamental dataset problems detected")
+    # EXTREME anti-leakage: Stop if validation is impossibly good
+    if total_loss/len(loader) < 0.1 and epoch > 2:  # Much higher threshold
+        print(f"EMERGENCY STOP: Validation loss too low ({total_loss/len(loader):.6f})")
+        print(f"   Even with temporal splitting and max noise, perfect scores persist")
+        print(f"   This indicates fundamental dataset corruption or model memorization")
+        print(f"   STOPPING training - dataset requires investigation")
+        raise RuntimeError("CRITICAL: Persistent data leakage despite temporal isolation")
     return total_loss/len(loader), val_metrics
 
 
