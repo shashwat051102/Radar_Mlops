@@ -14,6 +14,13 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
+# Set MLflow authentication to prevent interactive prompts
+if os.getenv('DAGSHUB_TOKEN'):
+    os.environ['MLFLOW_TRACKING_USERNAME'] = os.getenv('DAGSHUB_USERNAME', '')
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = os.getenv('DAGSHUB_TOKEN', '')
+    os.environ['DAGSHUB_USER_TOKEN'] = os.getenv('DAGSHUB_TOKEN', '')
+    print("🔑 MLflow authentication configured")
+
 import numpy as np
 import pandas as pd
 from scipy.io import loadmat
@@ -330,12 +337,20 @@ def init_mlflow():
         return None
 
     try:
+        # Set DagHub authentication explicitly to avoid interactive prompts
+        import os
+        os.environ['DAGSHUB_USER_TOKEN'] = CONFIG["DAGSHUB_TOKEN"]
+        
         # Use DagHub client to setup connection as per instructions
         dagshub.init(
             repo_owner=CONFIG["DAGSHUB_USERNAME"], 
             repo_name=CONFIG["DAGSHUB_REPO"], 
             mlflow=True
         )
+        
+        # Set MLflow tracking URI explicitly
+        mlflow_uri = f"https://dagshub.com/{CONFIG['DAGSHUB_USERNAME']}/{CONFIG['DAGSHUB_REPO']}.mlflow"
+        mlflow.set_tracking_uri(mlflow_uri)
         
         # Set experiment
         mlflow.set_experiment("Radar_MLOps_Improved")
