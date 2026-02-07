@@ -294,6 +294,7 @@ CONFIG = {
     "MIXUP_ALPHA": 0.2,  # Reduced mixup to preserve car distinctiveness
     "SCHEDULER": "cosine_warmup",  # Smooth LR schedule
     "FOCAL_LOSS_GAMMA": 3.0,  # Higher gamma for hard examples (cars)
+    "CLASS_BOOST_BICYCLE": 5.0,  # Boost for bicycle class
     "CLASS_BOOST_CAR": 10.0,  # MAXIMUM boost for car class
     "CLASS_BOOST_PERSON": 2.0,  # Moderate boost
     "BALANCED_SAMPLING": True,
@@ -704,11 +705,11 @@ def get_balanced_class_weights(train_labels, num_classes=3):
     label_counts = Counter(train_labels)
     print(f"Training class distribution: {dict(label_counts)}")
     
-    # MAXIMUM boosting for car class to force learning
+    # Apply boost factors to class weights
     boost_factors = {
-        0: 1.0,  # bicycle
-        1: CONFIG.get('CLASS_BOOST_CAR', 10.0),   # car - MAXIMUM boost
-        2: CONFIG.get('CLASS_BOOST_PERSON', 2.0)  # person - moderate boost
+        0: CONFIG.get('CLASS_BOOST_BICYCLE', 5.0),  # bicycle - moderate boost
+        1: CONFIG.get('CLASS_BOOST_CAR', 10.0),     # car - MAXIMUM boost
+        2: CONFIG.get('CLASS_BOOST_PERSON', 2.0)    # person - moderate boost
     }
     
     enhanced_weights = []
@@ -1395,7 +1396,7 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
     if class_weights is not None:
         alpha_weights = class_weights.to(device)
     else:
-        alpha_weights = torch.FloatTensor([1.0, CONFIG['CLASS_BOOST_CAR'], CONFIG['CLASS_BOOST_PERSON']]).to(device)
+        alpha_weights = torch.FloatTensor([CONFIG['CLASS_BOOST_BICYCLE'], CONFIG['CLASS_BOOST_CAR'], CONFIG['CLASS_BOOST_PERSON']]).to(device)
     
     criterion = FocalLoss(alpha=alpha_weights, gamma=CONFIG['FOCAL_LOSS_GAMMA'])
     print(f"Using Focal Loss (gamma={CONFIG['FOCAL_LOSS_GAMMA']}) with weights: {alpha_weights}")
