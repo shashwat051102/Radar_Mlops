@@ -293,14 +293,15 @@ CONFIG = {
     "GRADIENT_CLIP": 0.5,  # Relaxed for better convergence
     "MIXUP_ALPHA": 0.2,  # Reduced mixup to preserve car distinctiveness
     "SCHEDULER": "cosine_warmup",  # Smooth LR schedule
-    "FOCAL_LOSS_GAMMA": 3.0,  # Higher gamma for hard examples (cars)
-    "CLASS_BOOST_CAR": 10.0,  # MAXIMUM boost for car class
-    "CLASS_BOOST_PERSON": 2.0,  # Moderate boost
+    "FOCAL_LOSS_GAMMA": 4.0,  # Increased for harder examples  # Higher gamma for hard examples (cars)
+    "CLASS_BOOST_BICYCLE": 15.0,  # CRITICAL: Maximum boost for bicycle detection
+    "CLASS_BOOST_CAR": 8.0,  # Reduced from 10.0
+    "CLASS_BOOST_PERSON": 3.0,  # Increased from 2.0
     "BALANCED_SAMPLING": True,
     "EARLY_STOPPING_PATIENCE": 20,  # More patience for car class learning
     "USE_MIXUP": True,  # Enable mixup
     "COSINE_RESTARTS": True,  # Enable restarts
-    "VAL_LOSS_THRESHOLD": 0.1,  # EXTREME threshold for impossible scores
+    "VAL_LOSS_THRESHOLD": 0.1,  # Lower threshold - bicycle fixes may cause very good performance
     
     # Unfreeze more of backbone for better learning
     "FREEZE_BACKBONE_BLOCKS": 2,  # Freeze only first 2 blocks (was 4+)
@@ -402,6 +403,7 @@ class RadarDataset(Dataset):
         self.class_to_idx = class_to_idx
         self.transform = transform
         self.is_training = is_training
+        self.bicycle_augment_prob = 0.7  # High augmentation for bicycle class
         
         # BALANCED augmentations optimized for car detection
         if self.is_training:
@@ -451,6 +453,17 @@ class RadarDataset(Dataset):
         
         # Apply transforms
         image = self.img_transform(image)
+        
+        # Get label for bicycle-specific augmentation
+        label = sample['label']
+        
+        # BICYCLE FIX: Extra augmentation for bicycle class during training
+        if self.is_training and label == 0 and np.random.random() < self.bicycle_augment_prob:
+            # Additional bicycle-specific augmentations
+            image = transforms.functional.adjust_brightness(image, 1.0 + np.random.uniform(-0.3, 0.3))
+            image = transforms.functional.adjust_contrast(image, 1.0 + np.random.uniform(-0.2, 0.2))
+            if np.random.random() < 0.5:
+                image = transforms.functional.hflip(image)
 
         # Load radar
         if radar_path is None or not os.path.exists(radar_path):
@@ -704,11 +717,11 @@ def get_balanced_class_weights(train_labels, num_classes=3):
     label_counts = Counter(train_labels)
     print(f"Training class distribution: {dict(label_counts)}")
     
-    # MAXIMUM boosting for car class to force learning
+    # CRITICAL: Apply strong boost to underrepresented classes - BICYCLE PRIORITY
     boost_factors = {
-        0: 1.0,  # bicycle
-        1: CONFIG.get('CLASS_BOOST_CAR', 10.0),   # car - MAXIMUM boost
-        2: CONFIG.get('CLASS_BOOST_PERSON', 2.0)  # person - moderate boost
+        0: CONFIG.get('CLASS_BOOST_BICYCLE', 15.0),  # bicycle - MAXIMUM boost to fix detection
+        1: CONFIG.get('CLASS_BOOST_CAR', 8.0),       # car - reduced boost
+        2: CONFIG.get('CLASS_BOOST_PERSON', 3.0)     # person - moderate boost
     }
     
     enhanced_weights = []
@@ -958,6 +971,23 @@ def create_dataloaders(samples, class_to_idx):
     
     # Get class weights
     train_labels = [s['label'] for s in train_samples]
+    
+    # BICYCLE FIX: Oversample bicycle class to ensure equal representation
+    bicycle_samples = [s for s in train_samples if s['label'] == 0]
+    other_samples = [s for s in train_samples if s['label'] != 0]
+    
+    # Calculate how many more bicycle samples we need
+    other_class_count = len(other_samples) // 2  # Average of car and person
+    bicycle_deficit = max(0, other_class_count - len(bicycle_samples))
+    
+    if bicycle_deficit > 0:
+        # Duplicate bicycle samples to balance
+        bicycle_repeats = bicycle_deficit // len(bicycle_samples) + 1
+        additional_bicycles = (bicycle_samples * bicycle_repeats)[:bicycle_deficit]
+        train_samples.extend(additional_bicycles)
+        train_labels = [s['label'] for s in train_samples]
+        print(f"🚴 BICYCLE OVERSAMPLING: Added {len(additional_bicycles)} bicycle samples for balance")
+    
     class_weights = get_balanced_class_weights(train_labels, CONFIG['NUM_CLASSES'])
     
     # Balanced sampling
@@ -1395,7 +1425,7 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
     if class_weights is not None:
         alpha_weights = class_weights.to(device)
     else:
-        alpha_weights = torch.FloatTensor([1.0, CONFIG['CLASS_BOOST_CAR'], CONFIG['CLASS_BOOST_PERSON']]).to(device)
+        alpha_weights = torch.FloatTensor([CONFIG['CLASS_BOOST_BICYCLE'], CONFIG['CLASS_BOOST_CAR'], CONFIG['CLASS_BOOST_PERSON']]).to(device)
     
     criterion = FocalLoss(alpha=alpha_weights, gamma=CONFIG['FOCAL_LOSS_GAMMA'])
     print(f"Using Focal Loss (gamma={CONFIG['FOCAL_LOSS_GAMMA']}) with weights: {alpha_weights}")
@@ -1573,10 +1603,18 @@ def train_model(model, train_loader, val_loader, test_loader, class_weights=None
             val_acc_pct = val_m['accuracy'] * 100
             gap_pct = abs(train_val_gap * 100)
             
-            if train_acc_pct > 60 and val_acc_pct > 60 and gap_pct < 5:
+            # BICYCLE CLASS MONITORING: Track bicycle F1 improvement
+            bicycle_f1 = val_m.get('per_class_f1', {}).get('bicycle', 0.0)
+            if bicycle_f1 > 0.1:  # Lower threshold to detect any improvement
+                print(f"🚴 BICYCLE DETECTION PROGRESS: F1={bicycle_f1:.3f} - Improvement detected!")
+            if bicycle_f1 > 0.5:  # Good bicycle performance
+                print(f"🚴 EXCELLENT BICYCLE DETECTION: F1={bicycle_f1:.3f} - Target achieved!")
+            
+            # SUCCESS CRITERIA: Good performance + small gap + bicycle detection
+            if train_acc_pct > 60 and val_acc_pct > 60 and gap_pct < 5 and bicycle_f1 > 0.3:
                 print(f"\n🎯 SUCCESS STOP at epoch {epoch+1}")
                 print(f"   Training successful: Train={train_acc_pct:.1f}%, Val={val_acc_pct:.1f}%, Gap={gap_pct:.1f}%")
-                print(f"   Both accuracies >60% and gap <5% - model is performing well!")
+                print(f"   Bicycle detection: {bicycle_f1:.3f} - All classes performing well!")
                 break
         
         log_model(model, "final_model")
