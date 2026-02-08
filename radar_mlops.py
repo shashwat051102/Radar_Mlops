@@ -294,9 +294,9 @@ CONFIG = {
     "MIXUP_ALPHA": 0.2,  # Reduced mixup to preserve car distinctiveness
     "SCHEDULER": "cosine_warmup",  # Smooth LR schedule
     "FOCAL_LOSS_GAMMA": 3.0,  # Higher gamma for hard examples (cars)
-    "CLASS_BOOST_BICYCLE": 5.0,  # Boost for bicycle class
-    "CLASS_BOOST_CAR": 10.0,  # MAXIMUM boost for car class
-    "CLASS_BOOST_PERSON": 8.0,  # Strong boost for person class
+    "CLASS_BOOST_BICYCLE": 2.5,  # Reduced from 5.0
+    "CLASS_BOOST_CAR": 5.0,  # Reduced from 10.0
+    "CLASS_BOOST_PERSON": 4.0,  # Reduced from 8.0
     "BALANCED_SAMPLING": True,
     "EARLY_STOPPING_PATIENCE": 20,  # More patience for car class learning
     "USE_MIXUP": True,  # Enable mixup
