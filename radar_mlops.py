@@ -296,7 +296,7 @@ CONFIG = {
     "FOCAL_LOSS_GAMMA": 3.0,  # Higher gamma for hard examples (cars)
     "CLASS_BOOST_BICYCLE": 5.0,  # Boost for bicycle class
     "CLASS_BOOST_CAR": 10.0,  # MAXIMUM boost for car class
-    "CLASS_BOOST_PERSON": 2.0,  # Moderate boost
+    "CLASS_BOOST_PERSON": 4.0,  # Increased boost for person class
     "BALANCED_SAMPLING": True,
     "EARLY_STOPPING_PATIENCE": 20,  # More patience for car class learning
     "USE_MIXUP": True,  # Enable mixup
