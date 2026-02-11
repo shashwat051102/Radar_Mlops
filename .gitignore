@@ -48,6 +48,18 @@ mlflow/
 # DVC
 # =====================
 .dvc/cache/
+
+# =====================
+# Development files (exclude from production)
+# =====================
+*_report.md
+*_latex_report.tex
+*_solutions.py
+linkedin_post.md
+mlflow_run_*.tex
+final_project_*.md
+implementation_*.md
+training_performance_*.md
 .dvc/tmp/
 .dvc/config.local
 
